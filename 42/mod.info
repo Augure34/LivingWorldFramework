@@ -1,0 +1,6 @@
+name=Living World Framework
+id=LivingWorldFramework
+description=A central server-side manager that schedules and triggers registered world events.
+poster=poster.png
+version=1.0
+pzversion=42
