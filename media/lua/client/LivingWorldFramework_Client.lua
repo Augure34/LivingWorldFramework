@@ -72,10 +72,14 @@ local function registerPZAPIOptions()
                 end
                 
                 if optionObj and opt.onChange then
-                    optionObj.onChange = function(value)
-                        local resolvedVal = value
-                        if opt.type == "enum" and type(value) == "number" and opt.options then
-                            resolvedVal = opt.options[value] or value
+                    optionObj.onChange = function(self, value)
+                        local actualVal = value
+                        if actualVal == nil and type(self) ~= "table" then
+                            actualVal = self
+                        end
+                        local resolvedVal = actualVal
+                        if opt.type == "enum" and type(actualVal) == "number" and opt.options then
+                            resolvedVal = opt.options[actualVal] or actualVal
                         end
                         opt.onChange(group, resolvedVal)
                     end

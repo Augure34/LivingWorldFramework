@@ -5,6 +5,28 @@ isClient = function() return false end
 isServer = function() return false end
 isDebugEnabled = function() return true end
 
+-- Mock Build 42 ResourceLocation and ItemTag classes
+ResourceLocation = {
+    of = function(tagStr)
+        return tagStr
+    end
+}
+
+local tagMetatable = {
+    __tostring = function(self)
+        return self.val
+    end
+}
+
+ItemTag = {
+    get = function(resLoc)
+        local tagObj = { val = tostring(resLoc) }
+        setmetatable(tagObj, tagMetatable)
+        return tagObj
+    end
+}
+ItemTag.GAS_MASK = ItemTag.get("gasmask")
+
 -- Mock Build 42 CharacterStat Enum/Class
 CharacterStat = {
     FATIGUE = { getId = function() return "FATIGUE" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 1.0 end },

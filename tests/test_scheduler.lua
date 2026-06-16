@@ -61,10 +61,16 @@ getGameTime():setNightsSurvived(0)
 Events.OnInitWorld.callback()
 Events.OnLoadRadioScripts.callback()
 
--- Force TriggerChance to 1.0 for test events so scheduling checks are deterministic
+-- Force options for deterministic scheduling behavior during tests
 local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
-if fogOpts and fogOpts:getOption("TriggerChance") then
-    fogOpts:getOption("TriggerChance"):setValue(1.0)
+if fogOpts then
+    if fogOpts:getOption("TriggerChance") then fogOpts:getOption("TriggerChance"):setValue(1.0) end
+    if fogOpts:getOption("MinTimeUntilFirstTrigger") then fogOpts:getOption("MinTimeUntilFirstTrigger"):setValue(5) end
+    if fogOpts:getOption("MaxTimeUntilFirstTrigger") then fogOpts:getOption("MaxTimeUntilFirstTrigger"):setValue(5) end
+    if fogOpts:getOption("MinDuration") then fogOpts:getOption("MinDuration"):setValue(24) end
+    if fogOpts:getOption("MaxDuration") then fogOpts:getOption("MaxDuration"):setValue(24) end
+    if fogOpts:getOption("MinCooldown") then fogOpts:getOption("MinCooldown"):setValue(5) end
+    if fogOpts:getOption("MaxCooldown") then fogOpts:getOption("MaxCooldown"):setValue(5) end
 end
 local csOpts = PZAPI.ModOptions:getOptions("ColdSnap")
 if csOpts and csOpts:getOption("TriggerChance") then
@@ -344,9 +350,9 @@ local badConfigs = {
 -- Invoke server command handler directly
 Events.OnClientCommand.callback("LivingWorldFramework", "syncConfig", nonAdminPlayer, { configs = badConfigs })
 
--- Assert the bad config was rejected and server falls back to schema default (24)
+-- Assert the bad config was rejected and server falls back to schema default (72)
 local durationAfterRejection = LivingWorldFramework.GetConfig("TheFogDescend", "MaxDuration")
-assertEquals(durationAfterRejection, 24, "Server config sync from non-admin was ignored (defaults to 24)")
+assertEquals(durationAfterRejection, 72, "Server config sync from non-admin was ignored (defaults to 72)")
 
 -- Restore mock environment functions
 isServer = originalIsServer
@@ -886,7 +892,7 @@ for _, log in ipairs(sayLog) do
 end
 assertFalse(foundSay, "ColdSnap does NOT play start announcement when ShowCharacterVoice is false")
 
--- 3. TheFogDescend siren: PlaySiren = false by default
+-- 3. TheFogDescend siren: PlaySiren = true by default
 TestHelpers.resetModData()
 TestHelpers.clearSoundCalls()
 Events.OnInitWorld.callback()
@@ -894,23 +900,23 @@ Events.OnGameStart.callback()
 
 LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
 local soundCalls = TestHelpers.getSoundCalls()
-assertEquals(#soundCalls, 0, "No siren alarm sound called by default for TheFogDescend")
+assertEquals(#soundCalls, 1, "Siren alarm sound called by default for TheFogDescend")
+assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound by default")
 
--- 4. TheFogDescend siren: PlaySiren = true
+-- 4. TheFogDescend siren: PlaySiren = false
 TestHelpers.resetModData()
 TestHelpers.clearSoundCalls()
 Events.OnInitWorld.callback()
 Events.OnGameStart.callback()
 local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
 if fogOpts and fogOpts:getOption("PlaySiren") then
-    fogOpts:getOption("PlaySiren"):setValue(true)
+    fogOpts:getOption("PlaySiren"):setValue(false)
 end
-LivingWorldFramework.ServerConfigs["TheFogDescend"] = { PlaySiren = true }
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { PlaySiren = false }
 
 LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
 soundCalls = TestHelpers.getSoundCalls()
-assertEquals(#soundCalls, 1, "Siren alarm sound played when PlaySiren is true")
-assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound")
+assertEquals(#soundCalls, 0, "No siren alarm sound played when PlaySiren is false")
 
 print("-------------------------------------------------")
 print("TEST 19: Toxic Fog and Gas Mask Mechanics")
@@ -1015,9 +1021,11 @@ Events.OnPlayerUpdate.callback(mockPlayerObj) -- sets lastHours = 12
 
 -- Wear a valid vanilla gas mask
 local mockMask = {
+    getName = function(self) return "Gas Mask" end,
     getFullType = function(self) return "Base.Hat_GasMask" end,
     getType = function(self) return "Hat_GasMask" end,
-    getCondition = function(self) return 10 end
+    getCondition = function(self) return 10 end,
+    hasTag = function(self, itemTag) return tostring(itemTag) == "gasmask" end
 }
 mockWornItems = {
     { getItem = function(self) return mockMask end }
@@ -1028,26 +1036,12 @@ getGameTime():setHour(13)
 Events.OnPlayerUpdate.callback(mockPlayerObj)
 assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity remains 0 when wearing a valid gas mask")
 
--- Custom registered gas mask
-mockWornItems = {}
-TheFogDescend.registerGasMask("Modded.MyGasMask")
-local moddedMask = {
-    getFullType = function(self) return "Modded.MyGasMask" end,
-    getType = function(self) return "MyGasMask" end,
-    getCondition = function(self) return 5 end
-}
-mockWornItems = {
-    { getItem = function(self) return moddedMask end }
-}
 
--- 1 hour later: toxicity should remain 0
-getGameTime():setHour(14)
-Events.OnPlayerUpdate.callback(mockPlayerObj)
-assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity remains 0 when wearing a registered custom gas mask")
 
 -- Tagged B42 gas mask protection
 mockWornItems = {}
 local taggedMask = {
+    getName = function(self) return "Tagged Mask" end,
     getFullType = function(self) return "Modded.TaggedMask" end,
     getType = function(self) return "TaggedMask" end,
     getCondition = function(self) return 8 end,
@@ -1055,8 +1049,12 @@ local taggedMask = {
         local mockTags = { "gasmask" }
         return {
             size = function(self) return #mockTags end,
-            get = function(self, idx) return mockTags[idx + 1] end
+            get = function(self, idx) return mockTags[idx + 1] end,
+            toArray = function(self) return mockTags end
         }
+    end,
+    hasTag = function(self, itemTag)
+        return tostring(itemTag) == "gasmask"
     end
 }
 mockWornItems = {
@@ -1076,9 +1074,11 @@ assertTrue(mockModDataVal.fogToxicity < 0.5, "Toxicity decreases when wearing a 
 -- Broken gas mask (condition = 0)
 mockWornItems = {}
 local brokenMask = {
+    getName = function(self) return "Broken Gas Mask" end,
     getFullType = function(self) return "Base.Hat_GasMask" end,
     getType = function(self) return "Hat_GasMask" end,
-    getCondition = function(self) return 0 end
+    getCondition = function(self) return 0 end,
+    hasTag = function(self, itemTag) return tostring(itemTag) == "gasmask" end
 }
 mockWornItems = {
     { getItem = function(self) return brokenMask end }
@@ -1088,6 +1088,232 @@ mockWornItems = {
 getGameTime():setHour(15)
 Events.OnPlayerUpdate.callback(mockPlayerObj)
 assertTrue(mockModDataVal.fogToxicity > 0.0, "Toxicity increases when wearing a broken gas mask")
+
+-- TEST: Wearing both a non-gas mask item (like a Belt) and a valid gas mask
+mockWornItems = {
+    { getItem = function(self) return { getName = function() return "Belt" end, hasTag = function() return false end, getCondition = function() return 100 end } end },
+    { getItem = function(self) return mockMask end }
+}
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity < 0.5, "Toxicity decreases when wearing a Belt and a valid gas mask")
+
+-- TEST: Wearing both a non-gas mask item (like a Belt) and a broken gas mask
+mockWornItems = {
+    { getItem = function(self) return { getName = function() return "Belt" end, hasTag = function() return false end, getCondition = function() return 100 end } end },
+    { getItem = function(self) return brokenMask end }
+}
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity > 0.5, "Toxicity increases when wearing a Belt and a broken gas mask")
+
+-- TEST: Player in God Mode (no mask)
+isGodMode = true
+mockWornItems = {}
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity < 0.5, "Toxicity decreases in God Mode even without a mask")
+isGodMode = false
+
+-- TEST: Dead player toxicity reset
+isPlayerAlive = false
+mockModDataVal.fogToxicity = 0.5
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity reset to 0.0 for dead player")
+isPlayerAlive = true
+
+-- TEST: ToxicFogEnabled = false (Toxicity should recover even if outside without mask)
+local lwfOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
+if lwfOpts and lwfOpts:getOption("ToxicFogEnabled") then
+    lwfOpts:getOption("ToxicFogEnabled"):setValue(false)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { ToxicFogEnabled = false, ToxicityDeathHours = 12 }
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity < 0.5, "Toxicity decreases when ToxicFogEnabled is false")
+-- Restore
+if lwfOpts and lwfOpts:getOption("ToxicFogEnabled") then
+    lwfOpts:getOption("ToxicFogEnabled"):setValue(true)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = nil
+
+-- TEST: ToxicityDeathHours Scaling (Toxicity changes faster or slower depending on DeathHours)
+-- Case A: DeathHours = 6 (Faster build-up: +1/6 = 0.1667 per hour, faster recovery: -1/12 = 0.0833 per hour)
+if lwfOpts and lwfOpts:getOption("ToxicityDeathHours") then
+    lwfOpts:getOption("ToxicityDeathHours"):setValue(6)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { ToxicFogEnabled = true, ToxicityDeathHours = 6 }
+
+-- Build-up test
+mockModDataVal.fogToxicity = 0.0
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(math.abs(mockModDataVal.fogToxicity - 0.1667) < 0.001, "Toxicity increases twice as fast (0.1667) when ToxicityDeathHours is 6")
+
+-- Recovery test (should recover by 1/(6*2) = 1/12 = 0.0833)
+currentSquareIsOutside = false
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(math.abs(mockModDataVal.fogToxicity - 0.0833) < 0.001, "Toxicity recovers twice as fast (0.0833) when ToxicityDeathHours is 6")
+currentSquareIsOutside = true
+
+-- Case B: DeathHours = 24 (Slower build-up: +1/24 = 0.0417 per hour)
+if lwfOpts and lwfOpts:getOption("ToxicityDeathHours") then
+    lwfOpts:getOption("ToxicityDeathHours"):setValue(24)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { ToxicFogEnabled = true, ToxicityDeathHours = 24 }
+
+mockModDataVal.fogToxicity = 0.0
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(math.abs(mockModDataVal.fogToxicity - 0.0417) < 0.001, "Toxicity increases twice as slow (0.0417) when ToxicityDeathHours is 24")
+
+-- Restore
+if lwfOpts and lwfOpts:getOption("ToxicityDeathHours") then
+    lwfOpts:getOption("ToxicityDeathHours"):setValue(12)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = nil
+
+-- TEST: Health damage application at different toxicity levels
+-- Case A: fogToxicity <= 0.1 (No damage)
+currentSquareIsOutside = false -- Safe inside, toxicity will recover/stay low
+mockModDataVal.fogToxicity = 0.05
+mockBodyDamage.health = 100.0
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockBodyDamage.health, 100.0, "No health damage applied when toxicity is <= 0.1")
+currentSquareIsOutside = true
+
+-- Case B: fogToxicity = 0.5 (Linear scaling damage)
+mockModDataVal.fogToxicity = 0.5
+mockBodyDamage.health = 100.0
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockBodyDamage.health < 100.0, "Health damage applied when toxicity is 0.5")
+local updatedToxicity = 0.5 + 1.0 / 12
+local scale = (updatedToxicity - 0.1) / 0.9
+local expectedDamage = 1.0 * (100.0 / (12 * 0.9)) * scale * 2
+assertTrue(math.abs((100.0 - mockBodyDamage.health) - expectedDamage) < 0.01, "Health damage is scaled correctly according to linear formula")
+
+-- Case C: fogToxicity >= 1.0 (Instant death / full reduction)
+mockModDataVal.fogToxicity = 1.0
+mockBodyDamage.health = 100.0
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockBodyDamage.health, 0.0, "Instant death occurs when toxicity is 1.0")
+
+-- TEST: Coughing effect (chance, player text, sound trigger)
+-- Set up global addSound mock
+local addSoundCalled = false
+local addSoundArgs = {}
+_G.addSound = function(player, x, y, z, val1, val2)
+    addSoundCalled = true
+    addSoundArgs = { player = player, x = x, y = y, z = z, val1 = val1, val2 = val2 }
+end
+
+-- Case A: toxicity <= 0.05 (no cough)
+mockModDataVal.fogToxicity = 0.01
+local originalSay = mockPlayerObj.Say
+local sayCalled = false
+mockPlayerObj.Say = function(self, text)
+    sayCalled = true
+end
+TestHelpers.setMockRandomFloat(0.0) -- make roll always succeed if checked
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(12.05) -- dt = 0.05, updated toxicity = 0.01 + 0.05/12 = 0.014 <= 0.05
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertFalse(sayCalled, "Player does not cough when toxicity is <= 0.05")
+assertFalse(addSoundCalled, "No sound added when toxicity is <= 0.05")
+
+-- Case B: toxicity > 0.05 but roll fails (no cough)
+mockModDataVal.fogToxicity = 0.5
+sayCalled = false
+addSoundCalled = false
+-- dt * 1.2 = 1 * 1.2 = 1.2. If roll is 2.0 (>= 1.2), it fails.
+TestHelpers.setMockRandomFloat(2.0)
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertFalse(sayCalled, "Player does not cough when random roll is too high")
+assertFalse(addSoundCalled, "No sound added when random roll is too high")
+
+-- Case C: toxicity > 0.5 and roll succeeds (cough triggers)
+sayCalled = false
+addSoundCalled = false
+local sayText = ""
+mockPlayerObj.Say = function(self, text)
+    sayCalled = true
+    sayText = text
+end
+-- dt * 1.2 = 1.2. Random float 0.5 is < 1.2, so it succeeds.
+TestHelpers.setMockRandomFloat(0.5)
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(sayCalled, "Player coughs when toxicity > 0.05 and random roll succeeds")
+assertEquals(sayText, "*Cough* *Wheeze*", "Player says coughing text")
+assertTrue(addSoundCalled, "addSound is called when player coughs")
+assertEquals(addSoundArgs.x, 100, "addSound correct X coord")
+assertEquals(addSoundArgs.val1, 15, "addSound correct volume/radius")
+
+-- Restore mocks
+mockPlayerObj.Say = originalSay
+_G.addSound = nil
+TestHelpers.setMockRandomFloat(nil)
+
+
+-- TEST: Bypassing toxicity update on negative or extremely large time jumps
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback()
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+getGameTime():setHour(12) -- 0 hours advanced (dt <= 0)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.5, "Toxicity remains unchanged when dt is 0")
+
+getGameTime():setNightsSurvived(getGameTime():getNightsSurvived() + 2) -- Large jump (dt > 24)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.5, "Toxicity remains unchanged when dt is greater than 24 hours")
 
 -- Clean up mock values
 mockPlayerObj.isLocalPlayer = nil
@@ -1116,7 +1342,7 @@ assertEquals(group:getOption("Preset"):getValue(), 1, "Default preset raw value 
 assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Normal", "Default preset resolved is 'Normal'")
 assertEquals(group:getOption("MinTimeUntilFirstTrigger"):getValue(), 5, "Default MinTimeUntilFirstTrigger is 5")
 assertEquals(group:getOption("ToxicityDeathHours"):getValue(), 12, "Default ToxicityDeathHours is 12")
-assertEquals(group:getOption("PlaySiren"):getValue(), false, "Default PlaySiren is false")
+assertEquals(group:getOption("PlaySiren"):getValue(), true, "Default PlaySiren is true")
 assertEquals(group:getOption("MakeSprinters"):getValue(), true, "Default MakeSprinters is true")
 assertEquals(group:getOption("MakeAggressive"):getValue(), true, "Default MakeAggressive is true")
 
@@ -1131,26 +1357,19 @@ assertEquals(group:getOption("MakeSprinters"):getValue(), true, "Hardcore MakeSp
 
 -- 3. Modify a slider manually and check if preset becomes Custom
 group:getOption("ToxicityDeathHours"):setValue(8)
-assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying slider switches preset raw index to 4")
+assertEquals(group:getOption("Preset"):getValue(), 3, "Modifying slider switches preset raw index to 3")
 assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying slider switches preset resolved to 'Custom'")
 
--- 4. Select Permanent Fog preset and verify updates
-group:getOption("Preset"):setValue("Permanent Fog")
-assertEquals(group:getOption("Preset"):getValue(), 3, "Preset updated to index 3 (Permanent Fog)")
-assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Permanent Fog", "Preset resolved is 'Permanent Fog'")
-assertEquals(group:getOption("MinTimeUntilFirstTrigger"):getValue(), 0, "Permanent Fog MinTimeUntilFirstTrigger is 0")
-assertEquals(group:getOption("MinDuration"):getValue(), 168, "Permanent Fog MinDuration is 168")
-assertEquals(group:getOption("TriggerChance"):getValue(), 1.0, "Permanent Fog TriggerChance is 1.0")
-
--- 5. Modify a tickbox manually and check if preset becomes Custom
-group:getOption("PlaySiren"):setValue(true)
-assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying tickbox switches preset raw index to 4")
+-- 4. Modify a tickbox manually and check if preset becomes Custom
+group:getOption("Preset"):setValue("Normal")
+group:getOption("PlaySiren"):setValue(false)
+assertEquals(group:getOption("Preset"):getValue(), 3, "Modifying tickbox switches preset raw index to 3")
 assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying tickbox switches preset resolved to 'Custom'")
 
--- 6. Modify a zombie option manually and check if preset becomes Custom
+-- 5. Modify a zombie option manually and check if preset becomes Custom
 group:getOption("Preset"):setValue("Normal")
 group:getOption("MakeSprinters"):setValue(false)
-assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying zombie option switches preset raw index to 4")
+assertEquals(group:getOption("Preset"):getValue(), 3, "Modifying zombie option switches preset raw index to 3")
 assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying zombie option switches preset resolved to 'Custom'")
 
 print("-------------------------------------------------")
