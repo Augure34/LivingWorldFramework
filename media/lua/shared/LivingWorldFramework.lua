@@ -40,7 +40,25 @@ function LivingWorldFramework.GetConfig(eventId, optionId)
         if group then
             local opt = group:getOption(optionId)
             if opt then
-                return opt:getValue()
+                local val = opt:getValue()
+                -- If it's an enum, translate index (number) to string value
+                local schema = nil
+                if eventId == "LivingWorldFramework" then
+                    schema = LivingWorldFramework.configOptions
+                else
+                    local eventDef = LivingWorldFramework.events[eventId]
+                    if eventDef then
+                        schema = eventDef.configOptions
+                    end
+                end
+                if schema then
+                    for _, sOpt in ipairs(schema) do
+                        if sOpt.id == optionId and sOpt.type == "enum" and type(val) == "number" and sOpt.options then
+                            return sOpt.options[val] or val
+                        end
+                    end
+                end
+                return val
             end
         end
     end

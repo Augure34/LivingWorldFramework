@@ -23,8 +23,11 @@ end
 
 -- Helper to roll active event duration
 function LivingWorldFramework.RollEventDuration(eventDef, state)
-    local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration") or 1
-    local maxDur = LivingWorldFramework.GetConfig(eventDef.id, "MaxDuration") or 24
+    local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration")
+    local maxDur = LivingWorldFramework.GetConfig(eventDef.id, "MaxDuration")
+    if not minDur or not maxDur then
+        error("[LivingWorldFramework] RollEventDuration failed: MinDuration or MaxDuration configuration is nil!")
+    end
     if minDur > maxDur then minDur, maxDur = maxDur, minDur end
     state.activeDuration = LivingWorldFramework.Random(minDur, maxDur)
     print(string.format("[LivingWorldFramework] Event '%s' rolled active duration: %d hours", eventDef.id, state.activeDuration))
@@ -34,17 +37,23 @@ end
 function LivingWorldFramework.ScheduleNextEvent(eventDef, state, currentDay, isFirstTime)
     local minDays, maxDays
     if isFirstTime then
-        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinTimeUntilFirstTrigger") or 0
-        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxTimeUntilFirstTrigger") or 0
+        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinTimeUntilFirstTrigger")
+        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxTimeUntilFirstTrigger")
     else
-        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinCooldown") or 1
-        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxCooldown") or 30
+        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinCooldown")
+        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxCooldown")
+    end
+    if not minDays or not maxDays then
+        error("[LivingWorldFramework] ScheduleNextEvent failed: trigger/cooldown configuration is nil!")
     end
     if minDays > maxDays then minDays, maxDays = maxDays, minDays end
     local delay = LivingWorldFramework.Random(minDays, maxDays)
 
     -- Simulate forward daily trigger chance rolls to find the scheduled start day
-    local chance = LivingWorldFramework.GetConfig(eventDef.id, "TriggerChance") or 1.0
+    local chance = LivingWorldFramework.GetConfig(eventDef.id, "TriggerChance")
+    if not chance then
+        error("[LivingWorldFramework] ScheduleNextEvent failed: TriggerChance configuration is nil!")
+    end
     local extraDays = 0
     if chance < 1.0 and chance > 0 then
         while true do
@@ -73,8 +82,11 @@ function LivingWorldFramework.ScheduleNextEvent(eventDef, state, currentDay, isF
     state.scheduledStartTotalHours = state.scheduledStartDay * 24 + state.scheduledStartHour
 
     -- Roll the active duration for the next run
-    local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration") or 1
-    local maxDur = LivingWorldFramework.GetConfig(eventDef.id, "MaxDuration") or 24
+    local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration")
+    local maxDur = LivingWorldFramework.GetConfig(eventDef.id, "MaxDuration")
+    if not minDur or not maxDur then
+        error("[LivingWorldFramework] ScheduleNextEvent failed: MinDuration or MaxDuration configuration is nil!")
+    end
     if minDur > maxDur then minDur, maxDur = maxDur, minDur end
     state.activeDuration = LivingWorldFramework.Random(minDur, maxDur)
 
@@ -91,7 +103,10 @@ function LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
     local debugEnabled = LivingWorldFramework.GetConfig("LivingWorldFramework", "EnableDebug")
 
     -- Check if we survived enough days overall since start of world
-    local minNightsRequired = LivingWorldFramework.GetConfig(eventDef.id, "MinNightsSurvived") or 0
+    local minNightsRequired = LivingWorldFramework.GetConfig(eventDef.id, "MinNightsSurvived")
+    if not minNightsRequired then
+        error("[LivingWorldFramework] DefaultCanTrigger failed: MinNightsSurvived configuration is nil!")
+    end
     if nightsSurvived < minNightsRequired then
         if debugEnabled then
             print(string.format("[LivingWorldFramework] Event '%s' trigger check failed: nights survived (%d) < min required (%d)",

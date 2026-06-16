@@ -913,5 +913,247 @@ assertEquals(#soundCalls, 1, "Siren alarm sound played when PlaySiren is true")
 assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound")
 
 print("-------------------------------------------------")
+print("TEST 19: Toxic Fog and Gas Mask Mechanics")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+
+-- Setup mock variables for player
+local mockPlayerObj = getPlayer()
+local mockModDataVal = { fogToxicity = 0.0 }
+local mockWornItems = {}
+local mockBodyDamage = {
+    health = 100,
+    ReduceGeneralHealth = function(self, val) self.health = math.max(0.0, self.health - val) end
+}
+local mockStats = {
+    values = {
+        FATIGUE = 0.0,
+        ENDURANCE = 1.0,
+        PAIN = 0.0,
+        POISON = 0.0
+    },
+    get = function(self, stat)
+        return self.values[stat:getId()] or 0.0
+    end,
+    set = function(self, stat, val)
+        self.values[stat:getId()] = val
+    end
+}
+local isGodMode = false
+local currentSquareIsOutside = true
+local isPlayerAlive = true
+
+mockPlayerObj.isLocalPlayer = function(self) return true end
+mockPlayerObj.isAlive = function(self) return isPlayerAlive end
+mockPlayerObj.getModData = function(self) return mockModDataVal end
+mockPlayerObj.getCurrentSquare = function(self)
+    return {
+        isOutside = function(self) return currentSquareIsOutside end
+    }
+end
+mockPlayerObj.getWornItems = function(self)
+    return {
+        size = function(self) return #mockWornItems end,
+        get = function(self, idx) return mockWornItems[idx + 1] end
+    }
+end
+mockPlayerObj.getBodyDamage = function(self) return mockBodyDamage end
+mockPlayerObj.getStats = function(self) return mockStats end
+mockPlayerObj.isGodMod = function(self) return isGodMode end
+mockPlayerObj.getX = function(self) return 100 end
+mockPlayerObj.getY = function(self) return 100 end
+mockPlayerObj.getZ = function(self) return 0 end
+
+-- Initially, event is inactive, player is outside, not wearing mask.
+-- Toxicity should remain 0.
+TheFogDescend.isEventActive = false
+getGameTime():setNightsSurvived(0)
+getGameTime():setHour(12)
+Events.OnGameStart.callback() -- reset lastHours
+Events.OnPlayerUpdate.callback(mockPlayerObj) -- sets lastHours = 12
+
+getGameTime():setHour(13) -- 1 hour later
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity remains 0 when event is inactive")
+
+-- Activate event. Now exposed. Toxicity should build up.
+TheFogDescend.isEventActive = true
+Events.OnGameStart.callback() -- reset lastHours
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj) -- sets lastHours = 12
+
+-- 1 hour of exposure -> toxicity should be 1/12 ≈ 0.0833
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(math.abs(mockModDataVal.fogToxicity - 0.0833) < 0.001, "Toxicity increases by ~0.0833 after 1 hour of exposure")
+assertTrue(mockStats:get(CharacterStat.POISON) > 0, "Poison level increases with toxicity")
+assertTrue(mockStats:get(CharacterStat.FATIGUE) > 0, "Fatigue increases with toxicity")
+assertTrue(mockStats:get(CharacterStat.ENDURANCE) < 1.0, "Endurance decreases with toxicity")
+assertTrue(mockStats:get(CharacterStat.PAIN) > 0, "Pain increases with toxicity")
+
+-- Test safe recovery: 1h exposure should take 2h of safe to reduce to 0
+-- Move inside a building
+currentSquareIsOutside = false
+-- We check after 1 hour of safety (should reduce by 1/24 ≈ 0.0417, leaving 0.0417)
+getGameTime():setHour(14)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(math.abs(mockModDataVal.fogToxicity - 0.0417) < 0.001, "Toxicity recovers by ~0.0417 after 1 hour of safety")
+
+-- We check after 2nd hour of safety (should reduce to 0)
+getGameTime():setHour(15)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity recovers fully to 0 after 2 hours of safety")
+assertEquals(mockStats:get(CharacterStat.POISON), 0.0, "Poison level is cleared when toxicity reaches 0")
+
+-- Move back outside
+currentSquareIsOutside = true
+Events.OnGameStart.callback() -- reset lastHours
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj) -- sets lastHours = 12
+
+-- Wear a valid vanilla gas mask
+local mockMask = {
+    getFullType = function(self) return "Base.Hat_GasMask" end,
+    getType = function(self) return "Hat_GasMask" end,
+    getCondition = function(self) return 10 end
+}
+mockWornItems = {
+    { getItem = function(self) return mockMask end }
+}
+
+-- 1 hour later: toxicity should remain 0
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity remains 0 when wearing a valid gas mask")
+
+-- Custom registered gas mask
+mockWornItems = {}
+TheFogDescend.registerGasMask("Modded.MyGasMask")
+local moddedMask = {
+    getFullType = function(self) return "Modded.MyGasMask" end,
+    getType = function(self) return "MyGasMask" end,
+    getCondition = function(self) return 5 end
+}
+mockWornItems = {
+    { getItem = function(self) return moddedMask end }
+}
+
+-- 1 hour later: toxicity should remain 0
+getGameTime():setHour(14)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertEquals(mockModDataVal.fogToxicity, 0.0, "Toxicity remains 0 when wearing a registered custom gas mask")
+
+-- Tagged B42 gas mask protection
+mockWornItems = {}
+local taggedMask = {
+    getFullType = function(self) return "Modded.TaggedMask" end,
+    getType = function(self) return "TaggedMask" end,
+    getCondition = function(self) return 8 end,
+    getTags = function(self)
+        local mockTags = { "gasmask" }
+        return {
+            size = function(self) return #mockTags end,
+            get = function(self, idx) return mockTags[idx + 1] end
+        }
+    end
+}
+mockWornItems = {
+    { getItem = function(self) return taggedMask end }
+}
+
+-- Set toxicity to 0.5, then check if it decreases (meaning they are safe under mask protection)
+mockModDataVal.fogToxicity = 0.5
+Events.OnGameStart.callback() -- reset lastHours
+getGameTime():setHour(12)
+Events.OnPlayerUpdate.callback(mockPlayerObj) -- sets lastHours = 12
+
+getGameTime():setHour(13)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity < 0.5, "Toxicity decreases when wearing a tagged B42 gas mask (protected)")
+
+-- Broken gas mask (condition = 0)
+mockWornItems = {}
+local brokenMask = {
+    getFullType = function(self) return "Base.Hat_GasMask" end,
+    getType = function(self) return "Hat_GasMask" end,
+    getCondition = function(self) return 0 end
+}
+mockWornItems = {
+    { getItem = function(self) return brokenMask end }
+}
+
+-- 1 hour later: toxicity should increase (broken mask doesn't protect)
+getGameTime():setHour(15)
+Events.OnPlayerUpdate.callback(mockPlayerObj)
+assertTrue(mockModDataVal.fogToxicity > 0.0, "Toxicity increases when wearing a broken gas mask")
+
+-- Clean up mock values
+mockPlayerObj.isLocalPlayer = nil
+mockPlayerObj.isAlive = nil
+mockPlayerObj.getModData = nil
+mockPlayerObj.getCurrentSquare = nil
+mockPlayerObj.getWornItems = nil
+mockPlayerObj.getBodyDamage = nil
+mockPlayerObj.getStats = nil
+mockPlayerObj.isGodMod = nil
+mockPlayerObj.getX = nil
+mockPlayerObj.getY = nil
+mockPlayerObj.getZ = nil
+
+print("-------------------------------------------------")
+print("TEST 20: Configuration Presets")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+Events.OnInitWorld.callback()
+
+local group = PZAPI.ModOptions:getOptions("TheFogDescend")
+assertTrue(group ~= nil, "TheFogDescend options group registered")
+
+-- 1. Assert default preset is Normal
+assertEquals(group:getOption("Preset"):getValue(), 1, "Default preset raw value is index 1")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Normal", "Default preset resolved is 'Normal'")
+assertEquals(group:getOption("MinTimeUntilFirstTrigger"):getValue(), 5, "Default MinTimeUntilFirstTrigger is 5")
+assertEquals(group:getOption("ToxicityDeathHours"):getValue(), 12, "Default ToxicityDeathHours is 12")
+assertEquals(group:getOption("PlaySiren"):getValue(), false, "Default PlaySiren is false")
+assertEquals(group:getOption("MakeSprinters"):getValue(), true, "Default MakeSprinters is true")
+assertEquals(group:getOption("MakeAggressive"):getValue(), true, "Default MakeAggressive is true")
+
+-- 2. Select Hardcore preset and verify updates
+group:getOption("Preset"):setValue("Hardcore")
+assertEquals(group:getOption("Preset"):getValue(), 2, "Preset updated to index 2 (Hardcore)")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Hardcore", "Preset resolved is 'Hardcore'")
+assertEquals(group:getOption("MinTimeUntilFirstTrigger"):getValue(), 2, "Hardcore MinTimeUntilFirstTrigger is 2")
+assertEquals(group:getOption("ToxicityDeathHours"):getValue(), 6, "Hardcore ToxicityDeathHours is 6")
+assertEquals(group:getOption("PlaySiren"):getValue(), true, "Hardcore PlaySiren is true")
+assertEquals(group:getOption("MakeSprinters"):getValue(), true, "Hardcore MakeSprinters is true")
+
+-- 3. Modify a slider manually and check if preset becomes Custom
+group:getOption("ToxicityDeathHours"):setValue(8)
+assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying slider switches preset raw index to 4")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying slider switches preset resolved to 'Custom'")
+
+-- 4. Select Permanent Fog preset and verify updates
+group:getOption("Preset"):setValue("Permanent Fog")
+assertEquals(group:getOption("Preset"):getValue(), 3, "Preset updated to index 3 (Permanent Fog)")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Permanent Fog", "Preset resolved is 'Permanent Fog'")
+assertEquals(group:getOption("MinTimeUntilFirstTrigger"):getValue(), 0, "Permanent Fog MinTimeUntilFirstTrigger is 0")
+assertEquals(group:getOption("MinDuration"):getValue(), 168, "Permanent Fog MinDuration is 168")
+assertEquals(group:getOption("TriggerChance"):getValue(), 1.0, "Permanent Fog TriggerChance is 1.0")
+
+-- 5. Modify a tickbox manually and check if preset becomes Custom
+group:getOption("PlaySiren"):setValue(true)
+assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying tickbox switches preset raw index to 4")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying tickbox switches preset resolved to 'Custom'")
+
+-- 6. Modify a zombie option manually and check if preset becomes Custom
+group:getOption("Preset"):setValue("Normal")
+group:getOption("MakeSprinters"):setValue(false)
+assertEquals(group:getOption("Preset"):getValue(), 4, "Modifying zombie option switches preset raw index to 4")
+assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying zombie option switches preset resolved to 'Custom'")
+
+print("-------------------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
 print("-------------------------------------------------")
+

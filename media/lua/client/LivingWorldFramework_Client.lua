@@ -28,14 +28,56 @@ local function registerPZAPIOptions()
         if eventDef.configOptions then
             local group = PZAPI.ModOptions:create(eventId, eventDef.name or eventId)
             for _, opt in ipairs(eventDef.configOptions) do
+                local optionObj = nil
                 if not opt.hidden then
-                    if opt.type == "boolean" then
-                        group:addTickBox(opt.id, opt.name, opt.default, opt.tooltip)
+                    if opt.type == "title" then
+                        group:addTitle(opt.name)
+                    elseif opt.type == "separator" then
+                        group:addSeparator()
+                    elseif opt.type == "boolean" then
+                        optionObj = group:addTickBox(opt.id, opt.name, opt.default, opt.tooltip)
                     elseif opt.type == "integer" or opt.type == "double" then
                         local step = opt.step or (opt.type == "integer" and 1 or 0.1)
-                        group:addSlider(opt.id, opt.name, opt.min, opt.max, step, opt.default, opt.tooltip)
+                        optionObj = group:addSlider(opt.id, opt.name, opt.min, opt.max, step, opt.default, opt.tooltip)
                     elseif opt.type == "string" then
-                        group:addTextEntry(opt.id, opt.name, opt.default, opt.tooltip)
+                        optionObj = group:addTextEntry(opt.id, opt.name, opt.default, opt.tooltip)
+                    elseif opt.type == "enum" then
+                        optionObj = group:addComboBox(opt.id, opt.name, opt.tooltip)
+                        if optionObj and opt.options then
+                            local defaultVal = opt.default or (opt.options[opt.defaultIndex or 1])
+                            for _, val in ipairs(opt.options) do
+                                optionObj:addItem(val, val == defaultVal)
+                            end
+
+                            local nativeSetValue = optionObj.setValue
+                            optionObj.setValue = function(self, val)
+                                local targetIndex = val
+                                if type(val) == "string" then
+                                    for idx, sVal in ipairs(opt.options) do
+                                        if sVal == val then
+                                            targetIndex = idx
+                                            break
+                                        end
+                                    end
+                                end
+                                if type(targetIndex) == "number" then
+                                    nativeSetValue(self, targetIndex)
+                                    if self.onChange then
+                                        self.onChange(targetIndex)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if optionObj and opt.onChange then
+                    optionObj.onChange = function(value)
+                        local resolvedVal = value
+                        if opt.type == "enum" and type(value) == "number" and opt.options then
+                            resolvedVal = opt.options[value] or value
+                        end
+                        opt.onChange(group, resolvedVal)
                     end
                 end
             end
@@ -54,7 +96,9 @@ local function collectConfigurations()
     configs["LivingWorldFramework"] = {}
     if LivingWorldFramework.configOptions then
         for _, opt in ipairs(LivingWorldFramework.configOptions) do
-            configs["LivingWorldFramework"][opt.id] = LivingWorldFramework.GetConfig("LivingWorldFramework", opt.id)
+            if opt.id then
+                configs["LivingWorldFramework"][opt.id] = LivingWorldFramework.GetConfig("LivingWorldFramework", opt.id)
+            end
         end
     end
 
@@ -63,7 +107,9 @@ local function collectConfigurations()
         if eventDef.configOptions then
             configs[eventId] = {}
             for _, opt in ipairs(eventDef.configOptions) do
-                configs[eventId][opt.id] = LivingWorldFramework.GetConfig(eventId, opt.id)
+                if opt.id then
+                    configs[eventId][opt.id] = LivingWorldFramework.GetConfig(eventId, opt.id)
+                end
             end
         end
     end

@@ -5,6 +5,15 @@ isClient = function() return false end
 isServer = function() return false end
 isDebugEnabled = function() return true end
 
+-- Mock Build 42 CharacterStat Enum/Class
+CharacterStat = {
+    FATIGUE = { getId = function() return "FATIGUE" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 1.0 end },
+    ENDURANCE = { getId = function() return "ENDURANCE" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 1.0 end },
+    PAIN = { getId = function() return "PAIN" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 100.0 end },
+    POISON = { getId = function() return "POISON" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 100.0 end },
+    SICKNESS = { getId = function() return "SICKNESS" end, getMinimumValue = function() return 0.0 end, getMaximumValue = function() return 100.0 end }
+}
+
 local mockRandFloatVal = nil
 ZombRandFloat = function(min, max)
     if mockRandFloatVal then return mockRandFloatVal end
@@ -319,7 +328,12 @@ function MockOption:getValue()
     return self.value
 end
 function MockOption:setValue(val)
-    self.value = val
+    if self.value ~= val then
+        self.value = val
+        if self.onChange then
+            self.onChange(val)
+        end
+    end
 end
 
 local MockOptionsGroup = {}
@@ -333,13 +347,58 @@ function MockOptionsGroup:getOption(optionId)
     return self.options[optionId]
 end
 function MockOptionsGroup:addTickBox(id, name, val, tooltip)
-    self.options[id] = MockOption:new(id, val)
+    local o = MockOption:new(id, val)
+    self.options[id] = o
+    return o
 end
 function MockOptionsGroup:addSlider(id, name, min, max, step, val, tooltip)
-    self.options[id] = MockOption:new(id, val)
+    local o = MockOption:new(id, val)
+    self.options[id] = o
+    return o
 end
 function MockOptionsGroup:addTextEntry(id, name, val, tooltip)
-    self.options[id] = MockOption:new(id, val)
+    local o = MockOption:new(id, val)
+    self.options[id] = o
+    return o
+end
+function MockOptionsGroup:addComboBox(id, name, tooltip)
+    local o = MockOption:new(id, 1)
+    o.optionsTable = {}
+    o.selected = 1
+    
+    o.addItem = function(self, itemName, isSelected)
+        table.insert(self.optionsTable, itemName)
+        if isSelected then
+            self.selected = #self.optionsTable
+        end
+    end
+    
+    o.getValue = function(self)
+        return self.selected
+    end
+    
+    o.setValue = function(self, val)
+        local newVal = val
+        if type(val) == "string" then
+            for idx, sVal in ipairs(self.optionsTable) do
+                if sVal == val then
+                    newVal = idx
+                    break
+                end
+            end
+        end
+        if type(newVal) == "number" then
+            if self.selected ~= newVal then
+                self.selected = newVal
+                if self.onChange then
+                    self.onChange(newVal)
+                end
+            end
+        end
+    end
+    
+    self.options[id] = o
+    return o
 end
 function MockOptionsGroup:addButton(id, name, tooltip, onclickfunc, target, arg1, arg2, arg3, arg4)
     self.options[id] = { type = "button", name = name, onclick = onclickfunc, target = target, args = { arg1, arg2, arg3, arg4 } }
