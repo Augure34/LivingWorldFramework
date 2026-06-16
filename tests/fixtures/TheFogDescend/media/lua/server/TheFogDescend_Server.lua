@@ -19,22 +19,6 @@ local FLOAT_CLOUD_INTENSITY = 8
 local FLOAT_AMBIENT = 9
 local FLOAT_DAYLIGHT_STRENGTH = 11
 
--- Safe announcement helper that broadcasts to all online players (MP) or the local player (SP)
-local function announceEvent(text)
-    if isServer() then
-        local players = getOnlinePlayers()
-        if players then
-            for i = 0, players:size() - 1 do
-                local p = players:get(i)
-                if p then p:Say(text) end
-            end
-        end
-    else
-        local p = getPlayer(0)
-        if p then p:Say(text) end
-    end
-end
-
 -- Define scheduler callbacks
 
 eventDef.onStart = function(state)
@@ -44,15 +28,16 @@ eventDef.onStart = function(state)
     local makeAggressive = LivingWorldFramework.GetConfig("TheFogDescend", "MakeAggressive")
     
     print("[TheFogDescend] Event starting. Pushing Sandbox modifiers and Climate overrides via LWF.")
-    announceEvent("An unnatural, thick fog is beginning to roll in...")
 
-    -- Play Silent Hill Alarm Siren
-    if isServer() then
-        sendServerCommand("TheFogDescend", "playSiren", {})
-    else
-        local soundManager = getSoundManager()
-        if soundManager then
-            soundManager:PlaySound("TheFogDescend_Siren", false, 1.0)
+    -- Play Silent Hill Alarm Siren if configured
+    if LivingWorldFramework.GetConfig("TheFogDescend", "PlaySiren") then
+        if isServer() then
+            sendServerCommand("TheFogDescend", "playSiren", {})
+        else
+            local soundManager = getSoundManager()
+            if soundManager then
+                soundManager:PlaySound("TheFogDescend_Siren", false, 1.0)
+            end
         end
     end
 
@@ -90,7 +75,6 @@ end
 eventDef.onStop = function(state)
     isEventActive = false
     print("[TheFogDescend] Event stopping. Popping modifiers and clearing overrides.")
-    announceEvent("The unnatural fog is beginning to lift. The danger has passed.")
 
     -- Pop sandbox modifications
     LivingWorldFramework.PopModifier("TheFogDescend", "ZombieLore.Speed")

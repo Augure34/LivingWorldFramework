@@ -2,6 +2,12 @@
 
 `LivingWorldFramework` is a centralized coordination API and scheduling framework for Project Zomboid Build 42 mods. It acts as an authoritative mediator between game globals (like `SandboxVars` and `ClimateManager`) and custom event mods to ensure multiple environmental or zombie-altering events can coexist and execute without conflicting or clobbering each other.
 
+## Published Steam Workshop Items
+
+* **Living World Framework (Core)**: [Steam Workshop Page](https://steamcommunity.com/sharedfiles/filedetails/?id=3740241984)
+* **The Fog Descend**: [Steam Workshop Page](https://steamcommunity.com/sharedfiles/filedetails/?id=3740242544)
+* **Cold Snap (Reference Mod)**: [Steam Workshop Page](https://steamcommunity.com/sharedfiles/filedetails/?id=3740249961)
+
 ---
 
 ## Key Capabilities
@@ -160,3 +166,69 @@ Removes your override value for the climate float index. Relinquishes admin cont
 LivingWorldFramework.RequestZombieRefresh()
 ```
 Flags the framework to execute a cell-wide zombie refresh. LWF coalesces all update requests made during the tick into a **single, unified cell iteration** at the end of the update frame, preventing severe framerate spikes.
+
+---
+
+## 4. Predetermined Scheduling & Forecast Warnings
+
+To maximize CPU efficiency and allow for immersive, multi-day weather forecast alerts on the Emergency Broadcast System (AEBS) radio channel, LWF uses a **predetermined schedule model**. 
+
+Instead of rolling probabilities and checks every hour, the next start day, hour, and duration are pre-calculated and stored in persistent `ModData` immediately upon the completion (or registration) of an event.
+
+### 4.1 How Scheduling Works
+
+1. **Trigger Time Predetermination**:
+   When an event stops, LWF rolls the cooldown days (using `MinCooldown`/`MaxCooldown`). If the event uses a `TriggerChance` less than 1.0 (e.g., a daily 20% trigger probability), LWF simulates forward daily probability rolls in a loop until a success occurs, adding a day of delay for each simulated failure. This predetermines the target start day instantly.
+2. **Start Hour & Duration**:
+   LWF rolls the start hour (satisfying `OnlyNight`/`OnlyDay` constraints) and pre-rolls the duration of the next active run.
+3. **Execution**:
+   LWF compiles these into a single absolute timestamp:
+   `state.scheduledStartTotalHours = state.scheduledStartDay * 24 + state.scheduledStartHour`
+   Hourly checks perform a cheap comparison: `currentTotalHours >= state.scheduledStartTotalHours`. While waiting, this consumes virtually zero CPU time.
+4. **Condition Buffering**:
+   Once the scheduled start time is reached, if conditions are blocked (e.g., `OnlyRain` is set but it is not raining, or a higher priority exclusive event is running), the event buffers. It remains scheduled and checks again each hour until conditions clear, rather than canceling or rolling again.
+
+### 4.2 Scheduling Defaults in Event Definitions
+
+Add default scheduling and radio properties directly inside your shared event registration:
+
+```lua
+local eventDef = {
+    id = "TheFogDescend",
+    name = "The Fog Descend",
+    
+    -- Default scheduling limits (overridden by server configurations/Mod Options)
+    defaultMinTimeUntilFirstTrigger = 5,
+    defaultMaxTimeUntilFirstTrigger = 5,
+    defaultMinDuration = 24,
+    defaultMaxDuration = 24,
+    defaultMinCooldown = 5,
+    defaultMaxCooldown = 5,
+    defaultTriggerChance = 0.2,
+    
+    -- Radio Broadcast Forecast Configuration
+    radioWarning = {
+        leadHours = 24, -- Start broadcasting warnings 24 hours (1 day) before the scheduled start
+        message = "~~ WEATHER ALERT ~~ REGIONAL DENSE FOG ADVISORY. EXTREME VISIBILITY REDUCTION INCOMING.",
+        color = { r = 1.0, g = 0.3, b = 0.3 }
+    },
+    defaultShowRadioWarnings = true,
+    defaultShowCharacterVoice = false,
+    
+    -- Expose scheduling options to native Mod Options menu
+    exposeTimeUntilFirstTrigger = true,
+    exposeDuration = true,
+    exposeCooldown = true,
+    exposeTriggerChance = true,
+    exposeTimeOfDay = false,
+}
+```
+
+### 4.3 Inspecting Scheduled State
+
+Event scripts or extensions can query the following persistent variables in their `state` tables:
+* `state.scheduledStartDay`: (number) The target in-game day (nights survived) for the next run.
+* `state.scheduledStartHour`: (number) The target hour for the next run (0-23).
+* `state.scheduledStartTotalHours`: (number) The absolute hour timestamp for the next run (`scheduledStartDay * 24 + scheduledStartHour`).
+* `state.activeDuration`: (number) The pre-rolled duration of the next run in hours.
+* `state.actualEndTotalHours`: (number) The absolute hour timestamp when the currently active run will finish (`triggerTotalHours + activeDuration`).

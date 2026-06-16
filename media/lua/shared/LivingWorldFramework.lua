@@ -447,6 +447,26 @@ function LivingWorldFramework.RegisterEvent(eventDef)
         hidden = not expMinNights
     })
 
+    if eventDef.radioWarning then
+        addOptionIfMissing({
+            id = "ShowRadioWarnings",
+            name = "Enable Radio Warnings",
+            type = "boolean",
+            default = eventDef.defaultShowRadioWarnings ~= false,
+            tooltip = "Whether warnings for this event are injected into the automated weather forecast channel."
+        })
+    end
+
+    if eventDef.characterVoiceStart or eventDef.characterVoiceStop then
+        addOptionIfMissing({
+            id = "ShowCharacterVoice",
+            name = "Enable Character Voice",
+            type = "boolean",
+            default = eventDef.defaultShowCharacterVoice == true,
+            tooltip = "Whether the player character reacts out loud in chat when the event starts and ends."
+        })
+    end
+
     LivingWorldFramework.events[eventDef.id] = eventDef
     print(string.format("[LivingWorldFramework] Registered event: %s (Priority: %d, Exclusivity: %s)", 
         eventDef.id, eventDef.priority, eventDef.exclusivity))

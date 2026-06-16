@@ -3,6 +3,24 @@ if isClient() and not isServer() then return end -- Only load on server or singl
 LivingWorldFramework = LivingWorldFramework or {}
 LivingWorldFramework.events = LivingWorldFramework.events or {}
 
+-- Helper to announce event message in character voice (using Say)
+function LivingWorldFramework.AnnounceEvent(text)
+    local g = _G or getfenv()
+    local isSer = g.isServer and g.isServer()
+    if isSer then
+        local players = g.getOnlinePlayers and g.getOnlinePlayers()
+        if players then
+            for i = 0, players:size() - 1 do
+                local p = players:get(i)
+                if p then p:Say(text) end
+            end
+        end
+    else
+        local p = g.getPlayer and g.getPlayer(0)
+        if p then p:Say(text) end
+    end
+end
+
 -- Helper to roll active event duration
 function LivingWorldFramework.RollEventDuration(eventDef, state)
     local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration") or 1
@@ -12,31 +30,65 @@ function LivingWorldFramework.RollEventDuration(eventDef, state)
     print(string.format("[LivingWorldFramework] Event '%s' rolled active duration: %d hours", eventDef.id, state.activeDuration))
 end
 
--- Helper to roll next event cooldown day
-function LivingWorldFramework.RollEventCooldown(eventDef, state, currentDay)
-    local minCool = LivingWorldFramework.GetConfig(eventDef.id, "MinCooldown") or 1
-    local maxCool = LivingWorldFramework.GetConfig(eventDef.id, "MaxCooldown") or 30
-    if minCool > maxCool then minCool, maxCool = maxCool, minCool end
-    local rolled = LivingWorldFramework.Random(minCool, maxCool)
-    state.targetNextTriggerDay = currentDay + rolled
-    print(string.format("[LivingWorldFramework] Event '%s' stopped. Cooldown rolled: %d days. Target next trigger day: %d",
-        eventDef.id, rolled, state.targetNextTriggerDay))
+-- Helper to predetermine and schedule the next start day, hour, and duration for an event
+function LivingWorldFramework.ScheduleNextEvent(eventDef, state, currentDay, isFirstTime)
+    local minDays, maxDays
+    if isFirstTime then
+        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinTimeUntilFirstTrigger") or 0
+        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxTimeUntilFirstTrigger") or 0
+    else
+        minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinCooldown") or 1
+        maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxCooldown") or 30
+    end
+    if minDays > maxDays then minDays, maxDays = maxDays, minDays end
+    local delay = LivingWorldFramework.Random(minDays, maxDays)
+
+    -- Simulate forward daily trigger chance rolls to find the scheduled start day
+    local chance = LivingWorldFramework.GetConfig(eventDef.id, "TriggerChance") or 1.0
+    local extraDays = 0
+    if chance < 1.0 and chance > 0 then
+        while true do
+            if LivingWorldFramework.RandomFloat() <= chance then
+                break
+            else
+                extraDays = extraDays + 1
+            end
+        end
+    end
+
+    state.scheduledStartDay = currentDay + delay + extraDays
+
+    -- Roll start hour based on time of day restrictions
+    local onlyNight = LivingWorldFramework.GetConfig(eventDef.id, "OnlyNight")
+    local onlyDay = LivingWorldFramework.GetConfig(eventDef.id, "OnlyDay")
+    local startHour = 12
+    if onlyNight then
+        startHour = 20
+    elseif onlyDay then
+        startHour = 8
+    else
+        startHour = LivingWorldFramework.Random(8, 22)
+    end
+    state.scheduledStartHour = startHour
+    state.scheduledStartTotalHours = state.scheduledStartDay * 24 + state.scheduledStartHour
+
+    -- Roll the active duration for the next run
+    local minDur = LivingWorldFramework.GetConfig(eventDef.id, "MinDuration") or 1
+    local maxDur = LivingWorldFramework.GetConfig(eventDef.id, "MaxDuration") or 24
+    if minDur > maxDur then minDur, maxDur = maxDur, minDur end
+    state.activeDuration = LivingWorldFramework.Random(minDur, maxDur)
+
+    -- Reset dynamic runtime flags
+    state.rollSucceeded = true
+
+    print(string.format("[LivingWorldFramework] Scheduled %s run for '%s': Day %d at %d:00 (Total hours: %d, Duration: %d hours)",
+        isFirstTime and "first" or "next", eventDef.id, state.scheduledStartDay, state.scheduledStartHour, state.scheduledStartTotalHours, state.activeDuration))
 end
 
 -- Default automated trigger condition check
 function LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
     local nightsSurvived = gameTime:getNightsSurvived()
     local debugEnabled = LivingWorldFramework.GetConfig("LivingWorldFramework", "EnableDebug")
-
-    -- 1. Initialize first trigger target day if not set
-    if state.targetFirstTriggerDay == nil then
-        local minDays = LivingWorldFramework.GetConfig(eventDef.id, "MinTimeUntilFirstTrigger") or 0
-        local maxDays = LivingWorldFramework.GetConfig(eventDef.id, "MaxTimeUntilFirstTrigger") or 0
-        if minDays > maxDays then minDays, maxDays = maxDays, minDays end
-        state.targetFirstTriggerDay = nightsSurvived + LivingWorldFramework.Random(minDays, maxDays)
-        print(string.format("[LivingWorldFramework] Event '%s' rolled first trigger target day: %d (current day: %d)",
-            eventDef.id, state.targetFirstTriggerDay, nightsSurvived))
-    end
 
     -- Check if we survived enough days overall since start of world
     local minNightsRequired = LivingWorldFramework.GetConfig(eventDef.id, "MinNightsSurvived") or 0
@@ -48,51 +100,7 @@ function LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
         return false
     end
 
-    -- Check if we are past the first trigger day
-    if nightsSurvived < state.targetFirstTriggerDay then
-        if debugEnabled then
-            print(string.format("[LivingWorldFramework] Event '%s' trigger check failed: nights survived (%d) < first trigger day (%d)",
-                eventDef.id, nightsSurvived, state.targetFirstTriggerDay))
-        end
-        return false
-    end
-
-    -- Check if we are past the cooldown day
-    if nightsSurvived < (state.targetNextTriggerDay or 0) then
-        if debugEnabled then
-            print(string.format("[LivingWorldFramework] Event '%s' trigger check failed: nights survived (%d) < cooldown target day (%d)",
-                eventDef.id, nightsSurvived, state.targetNextTriggerDay or 0))
-        end
-        return false
-    end
-
-    -- 2. Daily probability roll (rolled once per day when eligible)
-    local chance = LivingWorldFramework.GetConfig(eventDef.id, "TriggerChance") or 1.0
-    if chance < 1.0 then
-        if state.lastRollDay ~= nightsSurvived then
-            state.lastRollDay = nightsSurvived
-            local rand = LivingWorldFramework.RandomFloat()
-            if rand <= chance then
-                state.rollSucceeded = true
-                print(string.format("[LivingWorldFramework] Event '%s' daily trigger chance roll succeeded (roll: %.3f <= chance: %.3f)",
-                    eventDef.id, rand, chance))
-            else
-                state.rollSucceeded = false
-                state.targetNextTriggerDay = nightsSurvived + 1
-                print(string.format("[LivingWorldFramework] Event '%s' daily trigger chance roll failed (roll: %.3f > chance: %.3f). Postponing to day %d.",
-                    eventDef.id, rand, chance, state.targetNextTriggerDay))
-            end
-        end
-        if not state.rollSucceeded then
-            if debugEnabled then
-                print(string.format("[LivingWorldFramework] Event '%s' trigger check failed: daily roll did not succeed on day %d",
-                    eventDef.id, nightsSurvived))
-            end
-            return false
-        end
-    end
-
-    -- 3. Weather restrictions
+    -- Weather restrictions
     local onlyRain = LivingWorldFramework.GetConfig(eventDef.id, "OnlyRain")
     local onlySnow = LivingWorldFramework.GetConfig(eventDef.id, "OnlySnow")
     local clim = getClimateManager()
@@ -111,7 +119,7 @@ function LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
         end
     end
 
-    -- 4. Time of day restrictions
+    -- Time of day restrictions
     local onlyNight = LivingWorldFramework.GetConfig(eventDef.id, "OnlyNight")
     local onlyDay = LivingWorldFramework.GetConfig(eventDef.id, "OnlyDay")
     if onlyNight or onlyDay then
@@ -133,9 +141,6 @@ function LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
         end
     end
 
-    if debugEnabled then
-        print(string.format("[LivingWorldFramework] Event '%s' trigger check succeeded on day %d", eventDef.id, nightsSurvived))
-    end
     return true
 end
 
@@ -239,13 +244,30 @@ function LivingWorldFramework.ServerTriggerEvent(eventId)
     
     local state = modData.eventStates[eventId]
     state.elapsedHours = 0
-    LivingWorldFramework.RollEventDuration(eventDef, state)
+
+    -- Roll/resolve duration for this run
+    local duration = state.activeDuration
+    if eventDef.getDuration then
+        local success, val = pcall(eventDef.getDuration)
+        if success then duration = val end
+    end
+    state.activeDuration = duration or 24
+
+    local gameTime = getGameTime()
+    local currentTotalHours = gameTime:getNightsSurvived() * 24 + gameTime:getHour()
+    state.actualEndTotalHours = currentTotalHours + state.activeDuration
 
     if eventDef.onStart then
         local success, err = pcall(eventDef.onStart, state)
         if not success then
             print("[LivingWorldFramework] ERROR running onStart for event '" .. eventId .. "': " .. tostring(err))
         end
+    end
+
+    -- Framework-managed character voice reaction on start
+    local showVoice = LivingWorldFramework.GetConfig(eventId, "ShowCharacterVoice")
+    if showVoice and eventDef.characterVoiceStart then
+        LivingWorldFramework.AnnounceEvent(eventDef.characterVoiceStart)
     end
 
     LivingWorldFramework.CheckAndExecuteZombieRefresh()
@@ -278,9 +300,21 @@ function LivingWorldFramework.ServerStopEvent(eventId)
         end
     end
 
+    -- Framework-managed character voice reaction on stop
+    if eventDef then
+        local showVoice = LivingWorldFramework.GetConfig(eventId, "ShowCharacterVoice")
+        if showVoice and eventDef.characterVoiceStop then
+            LivingWorldFramework.AnnounceEvent(eventDef.characterVoiceStop)
+        end
+    end
+
     if eventDef and state then
+        state.scheduledStartHour = nil
+        state.scheduledStartDay = nil
+        state.scheduledStartTotalHours = nil
+        state.actualEndTotalHours = nil
         local nightsSurvived = getGameTime():getNightsSurvived()
-        LivingWorldFramework.RollEventCooldown(eventDef, state, nightsSurvived)
+        LivingWorldFramework.ScheduleNextEvent(eventDef, state, nightsSurvived, false)
     end
 
     LivingWorldFramework.CheckAndExecuteZombieRefresh()
@@ -312,16 +346,15 @@ local function updateActiveEvent(eventId)
             end
         end
 
-        local duration = nil
-        if eventDef.getDuration then
-            local success, val = pcall(eventDef.getDuration)
-            if success then duration = val end
-        end
-        if not duration then
-            duration = state.activeDuration or state.duration
+        local gameTime = getGameTime()
+        local currentTotalHours = gameTime:getNightsSurvived() * 24 + gameTime:getHour()
+
+        -- Defensively restore/initialize target end time if missing
+        if not state.actualEndTotalHours then
+            state.actualEndTotalHours = currentTotalHours + (state.activeDuration or 24)
         end
 
-        if duration and state.elapsedHours >= duration then
+        if currentTotalHours >= state.actualEndTotalHours then
             print("[LivingWorldFramework] Event '" .. eventId .. "' completed duration.")
             LivingWorldFramework.ServerStopEvent(eventId)
         end
@@ -335,6 +368,11 @@ end
 local function everyHours()
     local modData = initModData()
     modData.globalHours = (modData.globalHours or 0) + 1
+
+    local gameTime = getGameTime()
+    local currentDay = gameTime:getNightsSurvived()
+    local currentHour = gameTime:getHour()
+    local currentTotalHours = currentDay * 24 + currentHour
 
     -- 1. Tick primary active exclusive event
     if modData.activeEventId then
@@ -352,7 +390,6 @@ local function everyHours()
     end
 
     -- 3. Check and trigger new scheduled events (if space is available)
-    local gameTime = getGameTime()
     local exclusiveTriggered = false
     for id, eventDef in pairs(LivingWorldFramework.events) do
         -- Skip check if event is already running
@@ -360,31 +397,30 @@ local function everyHours()
         
         if not isRunning then
             local skipExclusive = exclusiveTriggered and (eventDef.exclusivity == "Exclusive")
-            if skipExclusive then
-                if LivingWorldFramework.GetConfig("LivingWorldFramework", "EnableDebug") then
-                    print(string.format("[LivingWorldFramework] Event '%s' trigger check skipped: exclusive event already triggered this hour", id))
-                end
-            else
+            if not skipExclusive then
                 modData.eventStates[id] = modData.eventStates[id] or {}
                 local state = modData.eventStates[id]
                 
-                local canTrigger = false
-                if eventDef.canTrigger then
-                    local success, res = pcall(eventDef.canTrigger, gameTime, state)
-                    if success then
-                        canTrigger = res
+                -- Check if scheduled start time is reached
+                if state.scheduledStartTotalHours and currentTotalHours >= state.scheduledStartTotalHours then
+                    local canTrigger = false
+                    if eventDef.canTrigger then
+                        local success, res = pcall(eventDef.canTrigger, gameTime, state)
+                        if success then
+                            canTrigger = res
+                        else
+                            print("[LivingWorldFramework] ERROR running canTrigger for event '" .. id .. "': " .. tostring(res))
+                        end
                     else
-                        print("[LivingWorldFramework] ERROR running canTrigger for event '" .. id .. "': " .. tostring(res))
+                        canTrigger = LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
                     end
-                else
-                    canTrigger = LivingWorldFramework.DefaultCanTrigger(eventDef, gameTime, state)
-                end
 
-                if canTrigger then
-                    -- Attempt trigger. If exclusive, it can fail if another exclusive event has higher priority.
-                    local success = LivingWorldFramework.ServerTriggerEvent(id)
-                    if success and eventDef.exclusivity == "Exclusive" then
-                        exclusiveTriggered = true
+                    if canTrigger then
+                        -- Attempt trigger. If exclusive, it can fail if another exclusive event has higher priority.
+                        local success = LivingWorldFramework.ServerTriggerEvent(id)
+                        if success and eventDef.exclusivity == "Exclusive" then
+                            exclusiveTriggered = true
+                        end
                     end
                 end
             end
@@ -421,19 +457,16 @@ end
 -- Restores active events on load
 local function onGameStart()
     local modData = initModData()
+    local gameTime = getGameTime()
+    local currentDay = gameTime:getNightsSurvived()
+    local currentTotalHours = currentDay * 24 + gameTime:getHour()
     
     -- Initialize scheduling variables for all events
-    local currentDay = getGameTime():getNightsSurvived()
     for id, eventDef in pairs(LivingWorldFramework.events) do
         modData.eventStates[id] = modData.eventStates[id] or {}
         local state = modData.eventStates[id]
-        if state.targetFirstTriggerDay == nil then
-            local minDays = LivingWorldFramework.GetConfig(id, "MinTimeUntilFirstTrigger") or 0
-            local maxDays = LivingWorldFramework.GetConfig(id, "MaxTimeUntilFirstTrigger") or 0
-            if minDays > maxDays then minDays, maxDays = maxDays, minDays end
-            state.targetFirstTriggerDay = currentDay + LivingWorldFramework.Random(minDays, maxDays)
-            print(string.format("[LivingWorldFramework] Event '%s' initialized first trigger day: %d (current: %d)",
-                id, state.targetFirstTriggerDay, currentDay))
+        if state.scheduledStartTotalHours == nil then
+            LivingWorldFramework.ScheduleNextEvent(eventDef, state, currentDay, true)
         end
     end
     
@@ -443,6 +476,11 @@ local function onGameStart()
         print("[LivingWorldFramework] Active exclusive event '" .. activeId .. "' restored.")
         local eventDef = LivingWorldFramework.events[activeId]
         local state = modData.eventStates[activeId]
+        if state then
+            if not state.actualEndTotalHours then
+                state.actualEndTotalHours = currentTotalHours + (state.activeDuration or 24)
+            end
+        end
         if eventDef and eventDef.onStart then
             pcall(eventDef.onStart, state)
         end
@@ -453,6 +491,11 @@ local function onGameStart()
         print("[LivingWorldFramework] Active coexisting event '" .. activeId .. "' restored.")
         local eventDef = LivingWorldFramework.events[activeId]
         local state = modData.eventStates[activeId]
+        if state then
+            if not state.actualEndTotalHours then
+                state.actualEndTotalHours = currentTotalHours + (state.activeDuration or 24)
+            end
+        end
         if eventDef and eventDef.onStart then
             pcall(eventDef.onStart, state)
         end
@@ -461,8 +504,73 @@ local function onGameStart()
     LivingWorldFramework.CheckAndExecuteZombieRefresh()
 end
 
+-- Injects event warnings into the automated emergency broadcast forecast
+function LivingWorldFramework.InjectRadioWarnings(bc, gameTime)
+    local modData = initModData()
+    if not modData or not modData.eventStates then return end
+
+    local currentDay = gameTime:getNightsSurvived()
+    local currentHour = gameTime:getHour()
+    local currentTotalHours = currentDay * 24 + currentHour
+
+    for id, eventDef in pairs(LivingWorldFramework.events) do
+        local state = modData.eventStates[id]
+        if state and eventDef.radioWarning then
+            local showWarnings = LivingWorldFramework.GetConfig(id, "ShowRadioWarnings")
+            if showWarnings then
+                local lead = eventDef.radioWarning.leadHours or 4
+                
+                local readyToWarn = false
+                if state.scheduledStartTotalHours then
+                    local hoursRemaining = state.scheduledStartTotalHours - currentTotalHours
+                    if hoursRemaining > 0 and hoursRemaining <= lead then
+                        readyToWarn = true
+                    end
+                end
+
+                if readyToWarn then
+                    local msg = eventDef.radioWarning.message
+                    if type(msg) == "function" then
+                        local success, res = pcall(msg, state)
+                        if success then msg = res else msg = nil end
+                    end
+
+                    if msg then
+                        local color = eventDef.radioWarning.color or { r = 1.0, g = 1.0, b = 1.0 }
+                        -- Add dynamic warning line to the radio broadcast
+                        local comp = function(str) return str end -- mimics computerize formatting
+                        bc:AddRadioLine(RadioLine.new(comp(msg), color.r, color.g, color.b))
+                        print(string.format("[LivingWorldFramework] Injected radio warning for event '%s': %s", id, msg))
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Hook the vanilla Automated Emergency Broadcast System (AEBS) Lua forecaster
+local function hookWeatherChannel()
+    if not WeatherChannel or not WeatherChannel.CreateBroadcast then
+        print("[LivingWorldFramework] WeatherChannel or CreateBroadcast not found. Radio hook skipped.")
+        return
+    end
+
+    local originalCreateBroadcast = WeatherChannel.CreateBroadcast
+    WeatherChannel.CreateBroadcast = function(gameTime)
+        -- Call vanilla broadcast generator
+        local bc = originalCreateBroadcast(gameTime)
+        if bc then
+            -- Inject our framework warnings
+            LivingWorldFramework.InjectRadioWarnings(bc, gameTime)
+        end
+        return bc
+    end
+    print("[LivingWorldFramework] Hooked WeatherChannel AEBS broadcast successfully.")
+end
+
 -- Initialize events
 Events.OnInitWorld.Add(initModData)
 Events.OnGameStart.Add(onGameStart)
 Events.EveryHours.Add(everyHours)
 Events.OnClientCommand.Add(onClientCommand)
+Events.OnLoadRadioScripts.Add(hookWeatherChannel)

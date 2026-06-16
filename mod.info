@@ -1,6 +1,41 @@
 name=Living World Framework
 id=LivingWorldFramework
-description=A central server-side manager that schedules and triggers registered world events.
 poster=poster.png
 version=1.0
 pzversion=42
+url=https://steamcommunity.com/sharedfiles/filedetails/?id=3740241984
+description=This is a WIP. Please contact me if you have any plan in using it for a mod idea
+description=
+description=Living World Framework (LWF) for Build 42
+description=Living World Framework is a centralized coordination API and event-scheduling utility designed specifically for Project Zomboid Build 42. It acts as an authoritative mediator between game globals (such as SandboxVars and ClimateManager) and custom event mods to ensure multiple environmental or zombie-altering events can coexist and execute without conflicting or clobbering each other.
+description=
+description=If you are a mod developer building weather events, horde events, environmental catastrophes, or dynamic difficulty mods, LWF provides the core engine you need to make your mod fully compatible with other event-driven mods.
+description=
+description=Key Capabilities for Mod Developers
+description= Priority Preemptive Scheduling: Allows high-priority, exclusive events to gracefully preempt and pause lower-priority events, resuming them cleanly once the dominant event completes.
+description= Sandbox Modifier Stacking: Replaces destructive SandboxVars global assignments with a priority-sorted stack. When your event ends, variables fall back to the next highest-priority active event, or cleanly restore the host's original sandbox settings if the stack is empty.
+description= Climate Override Blending: Combines weather and atmospheric parameters (e.g., fog density, overcast clouds, desaturation) by taking the maximum density override of all active events, preventing visual glitches and sudden shifts.
+description= Coalesced Zombie Updates: Throttles expensive cell-wide zombie attribute reload loops (DoZombieStats()) into a single consolidated update loop per tick, eliminating severe frame drops and lag spikes when multiple events reload stats simultaneously.
+description=How to Use
+description=LWF is designed to be extremely lightweight and developer-friendly. You can register your custom event in a shared script in just a few lines:
+description=
+description=LivingWorldFramework = LivingWorldFramework or {}
+description=
+description=local eventDef = {
+description=    id = "MyCustomEvent",
+description=    name = "The Great Event",
+description=    priority = 10,                 -- Higher priority wins during overlaps
+description=    exclusivity = "Exclusive",     -- "Exclusive" or "Coexist"
+description=}
+description=
+description=LivingWorldFramework.RegisterEvent(eventDef)
+description=
+description=Then simply implement your lifecycle callbacks (canTrigger, onStart, onUpdate, and onStop) in your server-side script using the Stacking, Climate, and Performance APIs.
+description=
+description=Official mods The Fog Descend 
+description= Cold Snap (sample mod) 
+description=
+description=
+description=
+description=Workshop ID: 3740241984
+description=Mod ID: LivingWorldFramework

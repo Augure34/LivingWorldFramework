@@ -69,7 +69,30 @@ Events = {
     EveryOneMinute = createMockEvent(),
     OnClientCommand = createMockEvent(),
     OnServerCommand = createMockEvent(),
-    OnFillWorldObjectContextMenu = createMockEvent()
+    OnFillWorldObjectContextMenu = createMockEvent(),
+    OnLoadRadioScripts = createMockEvent()
+}
+
+-- Mock Radio Classes
+RadioLine = {}
+RadioLine.new = function(text, r, g, b)
+    return { text = text, r = r, g = g, b = b }
+end
+
+RadioBroadCast = {}
+RadioBroadCast.new = function(id, a, b)
+    local bc = { id = id, lines = {} }
+    bc.AddRadioLine = function(self, line)
+        table.insert(self.lines, line)
+    end
+    return bc
+end
+
+-- Mock WeatherChannel
+WeatherChannel = {
+    CreateBroadcast = function(gameTime)
+        return RadioBroadCast.new("MOCK_AEBS", -1, -1)
+    end
 }
 
 -- Mock SandboxOptions Java class

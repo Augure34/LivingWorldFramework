@@ -7,9 +7,13 @@ package.path = package.path .. ";./?.lua"
 local originalMathRandom = math.random
 local mockRandomFloat = nil
 local mockRandomInt = nil
+local mockRandomFloatsQueue = {}
 
 math.random = function(a, b)
     if not a and not b then
+        if #mockRandomFloatsQueue > 0 then
+            return table.remove(mockRandomFloatsQueue, 1)
+        end
         if mockRandomFloat then return mockRandomFloat end
         return originalMathRandom()
     end
@@ -21,18 +25,18 @@ end
 require("tests/mocks/zomboid_mock")
 
 -- Load Core Framework files
-require("LivingWorldFramework/42/media/lua/shared/LivingWorldFramework")
-require("LivingWorldFramework/42/media/lua/server/LivingWorldFramework_Server")
-require("LivingWorldFramework/42/media/lua/client/LivingWorldFramework_Client")
+require("LivingWorldFramework/media/lua/shared/LivingWorldFramework")
+require("LivingWorldFramework/media/lua/server/LivingWorldFramework_Server")
+require("LivingWorldFramework/media/lua/client/LivingWorldFramework_Client")
 
 -- Load TheFogDescend Mod files
-require("TheFogDescend/42/media/lua/shared/TheFogDescend")
-require("TheFogDescend/42/media/lua/server/TheFogDescend_Server")
-require("TheFogDescend/42/media/lua/client/TheFogDescend_Client")
+require("TheFogDescend/media/lua/shared/TheFogDescend")
+require("TheFogDescend/media/lua/server/TheFogDescend_Server")
+require("TheFogDescend/media/lua/client/TheFogDescend_Client")
 
 -- Load ColdSnap Mod files
-require("ColdSnap/42/media/lua/shared/ColdSnap")
-require("ColdSnap/42/media/lua/server/ColdSnap_Server")
+require("ColdSnap/media/lua/shared/ColdSnap")
+require("ColdSnap/media/lua/server/ColdSnap_Server")
 
 -- Simple Assert Helper
 local function assertEquals(actual, expected, name)
@@ -55,7 +59,7 @@ end
 -- Initialize World
 getGameTime():setNightsSurvived(0)
 Events.OnInitWorld.callback()
-Events.OnGameStart.callback()
+Events.OnLoadRadioScripts.callback()
 
 -- Force TriggerChance to 1.0 for test events so scheduling checks are deterministic
 local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
@@ -66,6 +70,8 @@ local csOpts = PZAPI.ModOptions:getOptions("ColdSnap")
 if csOpts and csOpts:getOption("TriggerChance") then
     csOpts:getOption("TriggerChance"):setValue(1.0)
 end
+
+Events.OnGameStart.callback()
 
 
 print("-------------------------------------------------")
@@ -98,7 +104,8 @@ assertEquals(minTimeOpt.default, 5, "MinTimeUntilFirstTrigger default value is 5
 assertEquals(minTimeOpt.hidden, false, "MinTimeUntilFirstTrigger is exposed (not hidden)")
 
 local modData = ModData.get("LivingWorldFramework")
-assertEquals(modData.eventStates["TheFogDescend"].targetFirstTriggerDay, 5, "First trigger day target initialized to 5")
+-- Note: ModData is populated after OnInitWorld/OnGameStart which uses defaults (5)
+assertEquals(modData.eventStates["TheFogDescend"].scheduledStartDay, 5, "First trigger day target scheduled to 5")
 
 print("-------------------------------------------------")
 print("TEST 2: Scheduler - Below First Trigger Day (Should Not Trigger)")
@@ -113,6 +120,12 @@ print("-------------------------------------------------")
 print("TEST 3: Scheduler - Trigger on First Trigger Day")
 print("-------------------------------------------------")
 getGameTime():setNightsSurvived(5)
+local modData = ModData.get("LivingWorldFramework")
+local fogState = modData.eventStates["TheFogDescend"]
+local currentHour = getGameTime():getHour()
+fogState.scheduledStartDay = 5
+fogState.scheduledStartHour = currentHour
+fogState.scheduledStartTotalHours = 5 * 24 + currentHour
 TestHelpers.clearZombies()
 local z1 = TestHelpers.addZombie()
 
@@ -132,18 +145,27 @@ assertEquals(fogState.val, 0.90, "Fog intensity is 0.90")
 print("-------------------------------------------------")
 print("TEST 4: Duration Ticking and Cooldown Rolling")
 print("-------------------------------------------------")
--- Event runs for 24 hours. Let's tick 23 times (event should still be active).
+-- -- Event runs for 24 hours. Let's tick 23 times (event should still be active).
+local gt = getGameTime()
+local startHour = gt:getHour()
+local startDay = gt:getNightsSurvived()
 for i = 1, 23 do
+    local currentTotal = startDay * 24 + startHour + i
+    gt:setNightsSurvived(math.floor(currentTotal / 24))
+    gt:setHour(currentTotal % 24)
     Events.EveryHours.callback()
 end
 assertEquals(modData.activeEventId, "TheFogDescend", "Event remains active at hour 23")
 assertEquals(SandboxVars.ZombieLore.Speed, 1, "Zombies are still sprinters")
 
 -- Tick 24th hour (event should finish and restore settings).
+local currentTotal = startDay * 24 + startHour + 24
+gt:setNightsSurvived(math.floor(currentTotal / 24))
+gt:setHour(currentTotal % 24)
 Events.EveryHours.callback()
 assertEquals(modData.activeEventId, nil, "Event stopped after 24 hours")
 assertEquals(SandboxVars.ZombieLore.Speed, 2, "Zombies speed restored to normal (2)")
-assertEquals(modData.eventStates["TheFogDescend"].targetNextTriggerDay, 10, "Next trigger day target set to 10 (current 5 + cooldown 5)")
+assertEquals(modData.eventStates["TheFogDescend"].scheduledStartDay, 11, "Next trigger day target set to 11 (current 6 + cooldown 5)")
 assertFalse(fogState.enabled, "Fog override is disabled")
 
 print("-------------------------------------------------")
@@ -350,9 +372,10 @@ Events.OnInitWorld.callback()
 Events.OnGameStart.callback()
 
 local serverModData = ModData.get("LivingWorldFramework")
-serverModData.eventStates["WeatherEvent"].targetFirstTriggerDay = 2
-
--- Set nights survived to 2 (cooldown/first trigger matches)
+local wState = serverModData.eventStates["WeatherEvent"]
+wState.scheduledStartDay = 2
+wState.scheduledStartHour = getGameTime():getHour()
+wState.scheduledStartTotalHours = 2 * 24 + wState.scheduledStartHour
 getGameTime():setNightsSurvived(2)
 
 -- Weather is clear
@@ -388,7 +411,10 @@ Events.OnInitWorld.callback()
 Events.OnGameStart.callback()
 
 local serverModData = ModData.get("LivingWorldFramework")
-serverModData.eventStates["NightEvent"].targetFirstTriggerDay = 2
+local nightState = serverModData.eventStates["NightEvent"]
+nightState.scheduledStartDay = 2
+nightState.scheduledStartHour = 22 -- night only
+nightState.scheduledStartTotalHours = 2 * 24 + 22
 getGameTime():setNightsSurvived(2)
 
 -- Set hour to midday (12:00)
@@ -411,42 +437,54 @@ local chanceEvent = {
     id = "ChanceEvent",
     exclusivity = "Coexist",
     exposeTriggerChance = true,
-    defaultTriggerChance = 0.5
+    defaultTriggerChance = 0.5,
+    exposeTimeUntilFirstTrigger = true,
+    defaultMinTimeUntilFirstTrigger = 2,
+    defaultMaxTimeUntilFirstTrigger = 2
 }
 LivingWorldFramework.RegisterEvent(chanceEvent)
 
--- Initialize it
+-- Initialize it and run OnGameStart once to initialize all other events
 TestHelpers.resetModData()
 getGameTime():setNightsSurvived(0)
 Events.OnInitWorld.callback()
 Events.OnGameStart.callback()
 
+-- Force chanceEvent defaults
+local chanceEventDef = LivingWorldFramework.events["ChanceEvent"]
+chanceEventDef.defaultMinTimeUntilFirstTrigger = 2
+chanceEventDef.defaultMaxTimeUntilFirstTrigger = 2
+chanceEventDef.defaultTriggerChance = 0.5
+
+-- Clear ChanceEvent state so it is scheduled fresh
 local serverModData = ModData.get("LivingWorldFramework")
-serverModData.eventStates["ChanceEvent"].targetFirstTriggerDay = 2
+serverModData.eventStates["ChanceEvent"] = nil
+
+-- Set up random floats queue: first roll (0.8) fails, second (0.1) succeeds.
+-- This should add 1 extra day to the schedule, targeting day 3 instead of 2.
+mockRandomFloatsQueue = { 0.8, 0.1 }
+Events.OnGameStart.callback()
+
+local serverModData = ModData.get("LivingWorldFramework")
+local cState = serverModData.eventStates["ChanceEvent"]
+assertEquals(cState.scheduledStartDay, 3, "ChanceEvent scheduled for day 3 after failing one daily probability roll")
+
+-- Check at day 2: shouldn't trigger
 getGameTime():setNightsSurvived(2)
-
--- First roll: fail the chance check (mock random to return 0.8 > 0.5)
-mockRandomFloat = 0.8
+getGameTime():setHour(cState.scheduledStartHour)
 Events.EveryHours.callback()
-assertFalse(serverModData.coexistingEvents["ChanceEvent"], "ChanceEvent does not trigger on failed probability roll")
-assertEquals(serverModData.eventStates["ChanceEvent"].targetNextTriggerDay, 3, "Failed roll sets targetNextTriggerDay to tomorrow (day 3)")
+assertFalse(serverModData.coexistingEvents["ChanceEvent"], "ChanceEvent does not trigger on day 2")
 
--- Verify that we don't roll again on day 2 even if random becomes favorable
-mockRandomFloat = 0.1
-Events.EveryHours.callback()
-assertFalse(serverModData.coexistingEvents["ChanceEvent"], "ChanceEvent still does not trigger on day 2 because lastRollDay = 2")
-
--- Move to day 3
+-- Move to day 3: should trigger
 getGameTime():setNightsSurvived(3)
--- Second roll: succeed the chance check (mock random to return 0.1 <= 0.5)
-mockRandomFloat = 0.1
 Events.EveryHours.callback()
-assertTrue(serverModData.coexistingEvents["ChanceEvent"] or false, "ChanceEvent triggers on day 3 with successful probability roll")
+assertTrue(serverModData.coexistingEvents["ChanceEvent"] or false, "ChanceEvent triggers on day 3 once scheduled start day is reached")
 
 -- Stop it
 LivingWorldFramework.ServerStopEvent("ChanceEvent")
 
 -- Clean up random mocks
+mockRandomFloatsQueue = {}
 mockRandomFloat = nil
 mockRandomInt = nil
 
@@ -553,10 +591,23 @@ if lwfOptions then
     if opt then opt:setValue(true) end
 end
 
--- Let's set ColdSnap to fail the first trigger check
-getGameTime():setNightsSurvived(1)
+-- Let's set ColdSnap to be scheduled now, but fail rain restriction
 local sModData = ModData.get("LivingWorldFramework")
-sModData.eventStates["ColdSnap"] = { targetFirstTriggerDay = 5 }
+sModData.eventStates["ColdSnap"] = sModData.eventStates["ColdSnap"] or {}
+local csState = sModData.eventStates["ColdSnap"]
+csState.scheduledStartDay = 1
+csState.scheduledStartHour = 12
+csState.scheduledStartTotalHours = 1 * 24 + 12
+
+-- Force ColdSnap to require rain
+LivingWorldFramework.ServerConfigs["ColdSnap"] = { OnlyRain = true }
+
+-- Set current time to scheduled time (Day 1, 12:00)
+getGameTime():setNightsSurvived(1)
+getGameTime():setHour(12)
+
+-- Weather is clear (should fail rain restriction)
+getClimateManager():setRaining(false)
 
 local printLog = {}
 local originalPrint = print
@@ -573,7 +624,7 @@ print = originalPrint
 -- Assert that the printLog contains the check failure message
 local foundLog = false
 for _, log in ipairs(printLog) do
-    if string.find(log, "ColdSnap") and string.find(log, "trigger check failed: nights survived") then
+    if string.find(log, "ColdSnap") and string.find(log, "trigger check failed: only triggers in rain") then
         foundLog = true
         break
     end
@@ -590,8 +641,17 @@ if lwfOptions then
     if opt then opt:setValue(false) end
 end
 
+-- Re-setup event state
 sModData = ModData.get("LivingWorldFramework")
-sModData.eventStates["ColdSnap"] = { targetFirstTriggerDay = 5 }
+sModData.eventStates["ColdSnap"] = sModData.eventStates["ColdSnap"] or {}
+csState = sModData.eventStates["ColdSnap"]
+csState.scheduledStartDay = 1
+csState.scheduledStartHour = 12
+csState.scheduledStartTotalHours = 1 * 24 + 12
+LivingWorldFramework.ServerConfigs["ColdSnap"] = { OnlyRain = true }
+getGameTime():setNightsSurvived(1)
+getGameTime():setHour(12)
+getClimateManager():setRaining(false)
 
 printLog = {}
 print = function(str)
@@ -604,7 +664,7 @@ print = originalPrint
 
 foundLog = false
 for _, log in ipairs(printLog) do
-    if string.find(log, "ColdSnap") and string.find(log, "trigger check failed: nights survived") then
+    if string.find(log, "ColdSnap") and string.find(log, "trigger check failed: only triggers in rain") then
         foundLog = true
         break
     end
@@ -621,20 +681,31 @@ TestHelpers.clearSoundCalls()
 local originalIsServer = isServer
 isServer = function() return false end
 
-LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
+-- Enable PlaySiren and trigger:
+    local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
+    if fogOpts and fogOpts:getOption("PlaySiren") then
+        fogOpts:getOption("PlaySiren"):setValue(true)
+    end
+    LivingWorldFramework.ServerConfigs["TheFogDescend"] = { PlaySiren = true }
+    LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
 
-local soundCalls = TestHelpers.getSoundCalls()
-assertEquals(#soundCalls, 1, "One sound call triggered in singleplayer")
-assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound in singleplayer")
-assertEquals(soundCalls[1].loop, false, "Sound loop is false")
-assertEquals(soundCalls[1].volume, 1.0, "Sound volume is 1.0")
+    soundCalls = TestHelpers.getSoundCalls()
+    assertEquals(#soundCalls, 1, "One sound call triggered in singleplayer when PlaySiren is true")
+    assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound in singleplayer")
+    assertEquals(soundCalls[1].loop, false, "Sound loop is false")
+    assertEquals(soundCalls[1].volume, 1.0, "Sound volume is 1.0")
 
-LivingWorldFramework.ServerStopEvent("TheFogDescend")
+    LivingWorldFramework.ServerStopEvent("TheFogDescend")
+    if fogOpts and fogOpts:getOption("PlaySiren") then
+        fogOpts:getOption("PlaySiren"):setValue(false)
+    end
+    LivingWorldFramework.ServerConfigs["TheFogDescend"] = nil
 
 -- 2. Multiplayer Siren Triggering (isServer() = true)
 TestHelpers.resetModData()
 TestHelpers.clearSoundCalls()
 isServer = function() return true end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { PlaySiren = true }
 
 LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
 
@@ -644,6 +715,7 @@ assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct sire
 
 -- Clean up
 isServer = originalIsServer
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = nil
 LivingWorldFramework.ServerStopEvent("TheFogDescend")
 
 print("-------------------------------------------------")
@@ -700,6 +772,145 @@ assertEquals(mockVehicle.stalledCount, 2, "Stalled count is 2")
 -- Clean up
 isServer = originalIsServer
 LivingWorldFramework.ServerStopEvent("TheFogDescend")
+
+print("-------------------------------------------------")
+print("TEST 17: AEBS Radio Warnings")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+
+-- Simulate scheduling TheFogDescend for Day 1, Hour 20:00 (Total hours: 44)
+local mData = ModData.get("LivingWorldFramework")
+mData.eventStates["TheFogDescend"].scheduledStartDay = 1
+mData.eventStates["TheFogDescend"].scheduledStartHour = 20
+mData.eventStates["TheFogDescend"].scheduledStartTotalHours = 44
+
+-- Current day is 0, hour is 19 (25 hours remaining, outside leadHours=24)
+getGameTime():setNightsSurvived(0)
+getGameTime():setHour(19)
+local bc = WeatherChannel.CreateBroadcast(getGameTime())
+local foundWarning = false
+for _, line in ipairs(bc.lines) do
+    if string.find(string.lower(line.text), "fog") then
+        foundWarning = true
+    end
+end
+assertFalse(foundWarning, "No warning injected at hour 19 (25 hours remaining)")
+
+-- Current day is 0, hour is 20 (24 hours remaining, inside leadHours=24)
+getGameTime():setHour(20)
+local bcWarn = WeatherChannel.CreateBroadcast(getGameTime())
+local foundWarning2 = false
+for _, line in ipairs(bcWarn.lines) do
+    if string.find(string.lower(line.text), "fog") then
+        foundWarning2 = true
+        assertEquals(line.r, 1.0, "Warning line is red (R=1)")
+        assertEquals(line.g, 0.3, "Warning line has correct G")
+        assertEquals(line.b, 0.3, "Warning line has correct B")
+    end
+end
+assertTrue(foundWarning2, "Warning successfully injected at hour 20 (24 hours remaining)")
+
+-- Disable ShowRadioWarnings for TheFogDescend
+local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
+if fogOpts and fogOpts:getOption("ShowRadioWarnings") then
+    fogOpts:getOption("ShowRadioWarnings"):setValue(false)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { ShowRadioWarnings = false }
+local bcWarnOff = WeatherChannel.CreateBroadcast(getGameTime())
+local foundWarning3 = false
+for _, line in ipairs(bcWarnOff.lines) do
+    if string.find(string.lower(line.text), "fog") then
+        foundWarning3 = true
+    end
+end
+assertFalse(foundWarning3, "Warning NOT injected when ShowRadioWarnings is false")
+if fogOpts and fogOpts:getOption("ShowRadioWarnings") then
+    fogOpts:getOption("ShowRadioWarnings"):setValue(true)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = nil -- restore
+
+print("-------------------------------------------------")
+print("TEST 18: Character Voice Alerts & Siren Configs")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+TestHelpers.clearSoundCalls()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+
+-- 1. ColdSnap starting: defaultShowCharacterVoice = true
+local sayLog = {}
+local origPrint = print
+print = function(str)
+    table.insert(sayLog, str)
+    origPrint(str)
+end
+
+LivingWorldFramework.ServerTriggerEvent("ColdSnap")
+
+print = origPrint
+
+local foundSay = false
+for _, log in ipairs(sayLog) do
+    if string.find(log, "%[MOCK SAY%] A freezing wind blows") then
+        foundSay = true
+        break
+    end
+end
+assertTrue(foundSay, "ColdSnap plays start announcement by default")
+
+-- 2. ColdSnap starting with ShowCharacterVoice = false
+TestHelpers.resetModData()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+local csOpts = PZAPI.ModOptions:getOptions("ColdSnap")
+if csOpts and csOpts:getOption("ShowCharacterVoice") then
+    csOpts:getOption("ShowCharacterVoice"):setValue(false)
+end
+LivingWorldFramework.ServerConfigs["ColdSnap"] = { ShowCharacterVoice = false }
+
+sayLog = {}
+print = function(str)
+    table.insert(sayLog, str)
+end
+LivingWorldFramework.ServerTriggerEvent("ColdSnap")
+print = origPrint
+
+foundSay = false
+for _, log in ipairs(sayLog) do
+    if string.find(log, "%[MOCK SAY%] A freezing wind blows") then
+        foundSay = true
+        break
+    end
+end
+assertFalse(foundSay, "ColdSnap does NOT play start announcement when ShowCharacterVoice is false")
+
+-- 3. TheFogDescend siren: PlaySiren = false by default
+TestHelpers.resetModData()
+TestHelpers.clearSoundCalls()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+
+LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
+local soundCalls = TestHelpers.getSoundCalls()
+assertEquals(#soundCalls, 0, "No siren alarm sound called by default for TheFogDescend")
+
+-- 4. TheFogDescend siren: PlaySiren = true
+TestHelpers.resetModData()
+TestHelpers.clearSoundCalls()
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+local fogOpts = PZAPI.ModOptions:getOptions("TheFogDescend")
+if fogOpts and fogOpts:getOption("PlaySiren") then
+    fogOpts:getOption("PlaySiren"):setValue(true)
+end
+LivingWorldFramework.ServerConfigs["TheFogDescend"] = { PlaySiren = true }
+
+LivingWorldFramework.ServerTriggerEvent("TheFogDescend")
+soundCalls = TestHelpers.getSoundCalls()
+assertEquals(#soundCalls, 1, "Siren alarm sound played when PlaySiren is true")
+assertEquals(soundCalls[1].name, "TheFogDescend_Siren", "Played the correct siren sound")
 
 print("-------------------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")

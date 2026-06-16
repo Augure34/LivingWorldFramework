@@ -15,6 +15,11 @@ local eventDef = {
     defaultMaxCooldown = 7,
     defaultTriggerChance = 0.2,
 
+    characterVoiceStart = "A freezing wind blows... A severe cold snap is starting!",
+    characterVoiceStop = "The freezing wind dies down. The cold snap has ended.",
+    defaultShowRadioWarnings = true,
+    defaultShowCharacterVoice = true,
+
     -- Expose scheduling to options menu
     exposeTimeUntilFirstTrigger = true,
     exposeDuration = true,

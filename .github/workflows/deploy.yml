@@ -1,0 +1,106 @@
+name: CI/CD - Release and Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Tests
+        run: node tests/run_tests.js
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed to retrieve tag messages
+
+      - name: Generate Staging Directory
+        run: |
+          MOD_ID="LivingWorldFramework"
+          STAGING_DIR="workshop_staging"
+          
+          # Create directory structure
+          mkdir -p "$STAGING_DIR/Contents/mods/$MOD_ID/42"
+          mkdir -p "$STAGING_DIR/Contents/mods/$MOD_ID/common"
+          
+          # Exclude list for rsync
+          EXCLUDES=(
+            --exclude=".git/"
+            --exclude=".github/"
+            --exclude=".agents/"
+            --exclude=".vscode/"
+            --exclude="tests/"
+            --exclude="node_modules/"
+            --exclude=".gitignore"
+            --exclude=".gitattributes"
+            --exclude="workshop.txt"
+            --exclude="preview.png"
+            --exclude="package.json"
+            --exclude="package-lock.json"
+            --exclude="workshop_staging"
+          )
+          
+          # Mirror to 42 subfolder only
+          rsync -av "${EXCLUDES[@]}" ./ "$STAGING_DIR/Contents/mods/$MOD_ID/42/"
+          
+          # Copy workshop.txt
+          cp workshop.txt "$STAGING_DIR/"
+          
+          # Copy preview image
+          if [ -f preview.png ]; then
+            cp preview.png "$STAGING_DIR/"
+          elif [ -f poster.png ]; then
+            cp poster.png "$STAGING_DIR/preview.png"
+          fi
+
+      - name: Extract Release Notes
+        id: changelog
+        run: |
+          git tag -l --format='%(contents)' ${{ github.ref_name }} > changenote.txt
+          if [ ! -s changenote.txt ]; then
+            git log -1 --pretty=%B > changenote.txt
+          fi
+          # Define multi-line output for changeNote
+          echo "note<<EOF" >> $GITHUB_OUTPUT
+          cat changenote.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Deploy to Steam Workshop
+        uses: m00nl1ght-dev/steam-workshop-deploy@v4
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF }}
+          appId: 108600
+          publishedFileId: 3740241984
+          path: './workshop_staging/Contents'
+          changeNote: ${{ steps.changelog.outputs.note }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --notes-file changenote.txt
