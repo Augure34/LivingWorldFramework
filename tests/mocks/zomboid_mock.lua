@@ -101,7 +101,8 @@ Events = {
     OnClientCommand = createMockEvent(),
     OnServerCommand = createMockEvent(),
     OnFillWorldObjectContextMenu = createMockEvent(),
-    OnLoadRadioScripts = createMockEvent()
+    OnLoadRadioScripts = createMockEvent(),
+    OnPlayerUpdate = createMockEvent()
 }
 
 -- Mock Radio Classes
@@ -204,7 +205,8 @@ local mockGameTime = {
     getNightsSurvived = function() return currentNightsSurvived end,
     setNightsSurvived = function(self, val) currentNightsSurvived = val end,
     getHour = function() return currentHour end,
-    setHour = function(self, val) currentHour = val end
+    setHour = function(self, val) currentHour = val end,
+    getWorldAgeHours = function(self) return currentNightsSurvived * 24 + currentHour end
 }
 getGameTime = function()
     return mockGameTime

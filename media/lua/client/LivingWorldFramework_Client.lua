@@ -168,5 +168,30 @@ local function onFillWorldObjectContextMenu(player, context, worldobjects, test)
     end)
 end
 
+local function onServerCommand(module, command, args)
+    if module ~= "LivingWorldFramework" then return end
+
+    if command == "syncSandboxVar" then
+        local path = args.path
+        local value = args.value
+
+        -- Split path by dots
+        local parts = {}
+        for part in string.gmatch(path, "[^.]+") do
+            table.insert(parts, part)
+        end
+
+        -- Update the nested SandboxVars table
+        local current = SandboxVars
+        for i = 1, #parts - 1 do
+            current = current[parts[i]]
+            if not current then return end
+        end
+        current[parts[#parts]] = value
+        print("[LivingWorldFramework] Synced SandboxVar from server: " .. path .. " = " .. tostring(value))
+    end
+end
+
 Events.OnFillWorldObjectContextMenu.Add(onFillWorldObjectContextMenu)
+Events.OnServerCommand.Add(onServerCommand)
 

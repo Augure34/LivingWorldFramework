@@ -31,10 +31,12 @@ end
 -- Centralized retrieval function for options
 function LivingWorldFramework.GetConfig(eventId, optionId)
     -- 1. If we are running in an environment where PZAPI is available, read from native ModOptions
-    local g = _G or getfenv()
-    local isCli = g.isClient and g.isClient()
-    local isSer = g.isServer and g.isServer()
+    local isCli = false
+    if isClient then isCli = isClient() end
+    local isSer = false
+    if isServer then isSer = isServer() end
     local isSP = not isCli and not isSer
+    local g = _G or getfenv()
     if (isCli or isSP) and g.PZAPI and g.PZAPI.ModOptions then
         local group = g.PZAPI.ModOptions:getOptions(eventId)
         if group then
@@ -154,6 +156,12 @@ local function setSandboxVar(path, value)
                 print("[LivingWorldFramework] Synced " .. path .. " to Java SandboxOptions: " .. tostring(value))
             end
         end
+    end
+
+    -- In multiplayer, broadcast the updated SandboxVar to all clients
+    local g = _G or getfenv()
+    if g.isServer and g.isServer() and g.sendServerCommand then
+        g.sendServerCommand("LivingWorldFramework", "syncSandboxVar", { path = path, value = value })
     end
 end
 

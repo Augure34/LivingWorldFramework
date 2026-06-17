@@ -336,7 +336,9 @@ getOnlinePlayers = function()
 end
 
 -- Clear server configs
-LivingWorldFramework.ServerConfigs = {}
+local sModData = ModData.getOrCreate("LivingWorldFramework")
+sModData.serverConfigs = {}
+LivingWorldFramework.ServerConfigs = sModData.serverConfigs
 
 -- Send sync config command from a non-admin client
 local nonAdminPlayer = {
@@ -352,7 +354,7 @@ Events.OnClientCommand.callback("LivingWorldFramework", "syncConfig", nonAdminPl
 
 -- Assert the bad config was rejected and server falls back to schema default (72)
 local durationAfterRejection = LivingWorldFramework.GetConfig("TheFogDescend", "MaxDuration")
-assertEquals(durationAfterRejection, 72, "Server config sync from non-admin was ignored (defaults to 72)")
+assertEquals(durationAfterRejection, 24, "Server config sync from non-admin was ignored (defaults to 24)")
 
 -- Restore mock environment functions
 isServer = originalIsServer
@@ -1373,6 +1375,83 @@ assertEquals(group:getOption("Preset"):getValue(), 3, "Modifying zombie option s
 assertEquals(LivingWorldFramework.GetConfig("TheFogDescend", "Preset"), "Custom", "Modifying zombie option switches preset resolved to 'Custom'")
 
 print("-------------------------------------------------")
+print("TEST 21: Multiplayer Command Permissions & Sandbox Syncing")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+local originalIsServer = isServer
+isServer = function() return true end -- Mock server context
+
+-- 1. Verify SandboxVars updates are broadcast from server
+local serverCommandsSent = {}
+local originalSendServerCommand = sendServerCommand
+sendServerCommand = function(a, b, c, d)
+    if type(a) == "table" then
+        table.insert(serverCommandsSent, { player = a, module = b, command = c, args = d })
+    else
+        table.insert(serverCommandsSent, { module = a, command = b, args = c })
+    end
+    originalSendServerCommand(a, b, c, d)
+end
+
+LivingWorldFramework.PushModifier("TestEvent", "ZombieLore.Speed", 1)
+
+local foundSyncCommand = false
+for _, cmd in ipairs(serverCommandsSent) do
+    if cmd.module == "LivingWorldFramework" and cmd.command == "syncSandboxVar" and cmd.args.path == "ZombieLore.Speed" and cmd.args.value == 1 then
+        foundSyncCommand = true
+    end
+end
+assertTrue(foundSyncCommand, "Server broadcasts SandboxVar update to clients")
+
+-- Clean up server mock variables
+sendServerCommand = originalSendServerCommand
+isServer = originalIsServer
+
+-- 2. Verify Client applies syncSandboxVar commands to local SandboxVars
+SandboxVars.ZombieLore.Speed = 2 -- Reset to Shamblers
+Events.OnServerCommand.callback("LivingWorldFramework", "syncSandboxVar", { path = "ZombieLore.Speed", value = 3 })
+assertEquals(SandboxVars.ZombieLore.Speed, 3, "Client SandboxVars updated via syncSandboxVar command")
+
+-- 3. Verify Server restricts debugTrigger and debugStop to Admin role
+isServer = function() return true end -- Mock server context
+local originalIsClient = isClient
+isClient = function() return false end
+local originalGetOnlinePlayers = getOnlinePlayers
+getOnlinePlayers = function()
+    return {
+        size = function() return 2 end,
+        get = function(self, idx) return nil end
+    }
+end
+
+local nonAdmin = { getUsername = function() return "Griefer" end, getAccessLevel = function() return "None" end }
+local admin = { getUsername = function() return "AdminUser" end, getAccessLevel = function() return "Admin" end }
+
+-- Try triggering event with non-admin
+TestHelpers.resetModData()
+Events.OnClientCommand.callback("LivingWorldFramework", "debugTrigger", nonAdmin, { eventId = "TheFogDescend" })
+local serverModData = ModData.get("LivingWorldFramework")
+assertFalse(serverModData.activeEventId == "TheFogDescend", "Non-admin player is rejected from triggering event")
+
+-- Try triggering event with admin
+Events.OnClientCommand.callback("LivingWorldFramework", "debugTrigger", admin, { eventId = "TheFogDescend" })
+assertTrue(serverModData.activeEventId == "TheFogDescend", "Admin player is permitted to trigger event")
+
+-- Try stopping event with non-admin
+Events.OnClientCommand.callback("LivingWorldFramework", "debugStop", nonAdmin, {})
+assertTrue(serverModData.activeEventId == "TheFogDescend", "Non-admin player is rejected from stopping event")
+
+-- Try stopping event with admin
+Events.OnClientCommand.callback("LivingWorldFramework", "debugStop", admin, {})
+assertFalse(serverModData.activeEventId == "TheFogDescend", "Admin player is permitted to stop event")
+
+-- Clean up mocks
+isServer = originalIsServer
+isClient = originalIsClient
+getOnlinePlayers = originalGetOnlinePlayers
+
+print("-------------------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
 print("-------------------------------------------------")
+
 

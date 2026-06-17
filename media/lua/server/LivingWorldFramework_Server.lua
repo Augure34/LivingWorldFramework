@@ -166,6 +166,8 @@ local function initModData()
     modData.coexistingEvents = modData.coexistingEvents or {}
     modData.eventStates = modData.eventStates or {}
     modData.globalHours = modData.globalHours or 0
+    modData.serverConfigs = modData.serverConfigs or {}
+    LivingWorldFramework.ServerConfigs = modData.serverConfigs
     return modData
 end
 
@@ -453,18 +455,29 @@ local function onClientCommand(module, command, player, args)
     print("[LivingWorldFramework] Received client command: " .. tostring(command) .. " from " .. tostring(player:getUsername()))
 
     local modData = initModData()
+    local isSinglePlayer = not isServer() or (isServer() and not isClient() and (not getOnlinePlayers() or getOnlinePlayers():size() <= 1))
+    local access = player:getAccessLevel()
+
     if command == "debugTrigger" then
-        LivingWorldFramework.ServerTriggerEvent(args.eventId)
-    elseif command == "debugStop" then
-        LivingWorldFramework.ServerStopEvent(args.eventId or modData.activeEventId)
-    elseif command == "syncConfig" then
-        local isSinglePlayer = not isServer() or (isServer() and not isClient() and (not getOnlinePlayers() or getOnlinePlayers():size() <= 1))
-        local access = player:getAccessLevel()
-        if isSinglePlayer or (access ~= "None" and access ~= "") then
-            LivingWorldFramework.ServerConfigs = args.configs
-            print("[LivingWorldFramework] Server synced mod configurations from client.")
+        if isSinglePlayer or access == "Admin" then
+            LivingWorldFramework.ServerTriggerEvent(args.eventId)
         else
-            print("[LivingWorldFramework] Ignored config sync from non-admin client: " .. player:getUsername())
+            print("[LivingWorldFramework] Refused debugTrigger command from non-admin: " .. player:getUsername())
+        end
+    elseif command == "debugStop" then
+        if isSinglePlayer or access == "Admin" then
+            LivingWorldFramework.ServerStopEvent(args.eventId or modData.activeEventId)
+        else
+            print("[LivingWorldFramework] Refused debugStop command from non-admin: " .. player:getUsername())
+        end
+    elseif command == "syncConfig" then
+        -- Only allow full Admin in multiplayer to overwrite/sync configs
+        if isSinglePlayer or access == "Admin" then
+            modData.serverConfigs = args.configs
+            LivingWorldFramework.ServerConfigs = modData.serverConfigs
+            print("[LivingWorldFramework] Server synced and saved mod configurations from Admin client: " .. player:getUsername())
+        else
+            print("[LivingWorldFramework] Ignored config sync from non-admin client: " .. player:getUsername() .. " (Access: " .. tostring(access) .. ")")
         end
     end
 end
