@@ -84,7 +84,12 @@ function LivingWorldFramework.GetConfig(eventId, optionId)
     if schema then
         for _, opt in ipairs(schema) do
             if opt.id == optionId then
-                return opt.default
+                if opt.default ~= nil then
+                    return opt.default
+                elseif opt.type == "enum" and opt.options then
+                    local idx = opt.defaultIndex or 1
+                    return opt.options[idx]
+                end
             end
         end
     end

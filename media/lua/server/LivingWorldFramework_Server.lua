@@ -261,6 +261,7 @@ function LivingWorldFramework.ServerTriggerEvent(eventId)
     
     local state = modData.eventStates[eventId]
     state.elapsedHours = 0
+    state.hasTriggeredOnce = true
 
     -- Roll/resolve duration for this run
     local duration = state.activeDuration
@@ -473,9 +474,47 @@ local function onClientCommand(module, command, player, args)
     elseif command == "syncConfig" then
         -- Only allow full Admin in multiplayer to overwrite/sync configs
         if isSinglePlayer or access == "Admin" then
+            -- Re-evaluate and reschedule non-running events if their scheduling configurations have actually changed
+            local gameTime = getGameTime()
+            local currentDay = gameTime:getNightsSurvived()
+            local schedulingKeys = {
+                "MinTimeUntilFirstTrigger",
+                "MaxTimeUntilFirstTrigger",
+                "MinCooldown",
+                "MaxCooldown",
+                "TriggerChance"
+            }
+
+            local eventsToReschedule = {}
+            for id, eventDef in pairs(LivingWorldFramework.events) do
+                local isRunning = (modData.activeEventId == id) or modData.coexistingEvents[id]
+                if not isRunning then
+                    local eventConfigs = args.configs[id]
+                    if eventConfigs then
+                        for _, key in ipairs(schedulingKeys) do
+                            if eventConfigs[key] ~= nil then
+                                local currentVal = LivingWorldFramework.GetConfig(id, key)
+                                if eventConfigs[key] ~= currentVal then
+                                    eventsToReschedule[id] = true
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
             modData.serverConfigs = args.configs
             LivingWorldFramework.ServerConfigs = modData.serverConfigs
             print("[LivingWorldFramework] Server synced and saved mod configurations from Admin client: " .. player:getUsername())
+
+            for id, _ in pairs(eventsToReschedule) do
+                local eventDef = LivingWorldFramework.events[id]
+                local state = modData.eventStates[id] or {}
+                modData.eventStates[id] = state
+                local isFirstTime = not state.hasTriggeredOnce
+                LivingWorldFramework.ScheduleNextEvent(eventDef, state, currentDay, isFirstTime)
+            end
         else
             print("[LivingWorldFramework] Ignored config sync from non-admin client: " .. player:getUsername() .. " (Access: " .. tostring(access) .. ")")
         end

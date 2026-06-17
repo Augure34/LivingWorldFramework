@@ -76,7 +76,7 @@ local eventDef = {
 
     configOptions = {
         { type = "title", name = "Event Presets" },
-        { id = "Preset", name = "Configuration Preset", type = "enum", options = { "Normal", "Hardcore", "Custom" }, defaultIndex = 1, tooltip = "Select a preset configuration, or customize settings below.",
+        { id = "Preset", name = "Configuration Preset", type = "enum", options = { "Normal", "Hardcore", "Custom" }, default = "Normal", defaultIndex = 1, tooltip = "Select a preset configuration, or customize settings below.",
           onChange = function(group, value)
               if value == "Custom" then return end
               local presetData = TheFogDescend.presets[value]

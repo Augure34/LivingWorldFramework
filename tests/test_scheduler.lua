@@ -1451,7 +1451,63 @@ isClient = originalIsClient
 getOnlinePlayers = originalGetOnlinePlayers
 
 print("-------------------------------------------------")
+print("TEST 22: Event Rescheduling on Configuration Change")
+print("-------------------------------------------------")
+TestHelpers.resetModData()
+local originalIsServer = isServer
+isServer = function() return true end -- Mock server context
+local originalIsClient = isClient
+isClient = function() return false end
+local originalGetOnlinePlayers = getOnlinePlayers
+getOnlinePlayers = function()
+    return {
+        size = function() return 2 end,
+        get = function(self, idx) return nil end
+    }
+end
+
+-- Initialize first run schedule
+Events.OnInitWorld.callback()
+Events.OnGameStart.callback()
+
+local serverModData = ModData.get("LivingWorldFramework")
+local state = serverModData.eventStates["TheFogDescend"]
+local initialScheduledDay = state.scheduledStartDay
+assertTrue(initialScheduledDay ~= nil, "Initial schedule was generated")
+
+-- Sync identical config (should NOT reschedule)
+local adminUser = { getUsername = function() return "AdminUser" end, getAccessLevel = function() return "Admin" end }
+local identicalConfigs = {
+    TheFogDescend = {
+        MinTimeUntilFirstTrigger = 5,
+        MaxTimeUntilFirstTrigger = 5,
+        MinCooldown = 5,
+        MaxCooldown = 5,
+        TriggerChance = 0.20
+    }
+}
+Events.OnClientCommand.callback("LivingWorldFramework", "syncConfig", adminUser, { configs = identicalConfigs })
+assertEquals(state.scheduledStartDay, initialScheduledDay, "Identical configuration does not trigger rescheduling")
+
+-- Sync updated config (should reschedule)
+local updatedConfigs = {
+    TheFogDescend = {
+        MinTimeUntilFirstTrigger = 20,
+        MaxTimeUntilFirstTrigger = 30,
+        MinCooldown = 20,
+        MaxCooldown = 30,
+        TriggerChance = 0.50
+    }
+}
+Events.OnClientCommand.callback("LivingWorldFramework", "syncConfig", adminUser, { configs = updatedConfigs })
+assertTrue(state.scheduledStartDay >= 20, "Updated scheduling configurations correctly triggers rescheduling")
+
+-- Clean up mocks
+isServer = originalIsServer
+isClient = originalIsClient
+getOnlinePlayers = originalGetOnlinePlayers
+
+print("-------------------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
 print("-------------------------------------------------")
-
 
